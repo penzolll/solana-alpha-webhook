@@ -25,20 +25,26 @@ function extractMints(tx) {
   return [...mints];
 }
 
-// Streamflow Lock
+// Streamflow Lock (FIX 100%)
 const lockedMints = new Map();
 
 function isStreamflowLockTx(tx) {
+  // Enhanced tx type
   if (tx.type === 'CREATE_LOCK_ESCROW') return true;
 
+  // Raw tx + logs (ini yang bikin unlock)
+  if (tx.logs) {
+    return tx.logs.some(log => 
+      log.includes('Instruction: Create') && 
+      log.includes(STREAMFLOW_PROGRAM_ID)
+    );
+  }
+
+  // Fallback: instructions
   if (tx.instructions) {
     return tx.instructions.some(i => i.programId === STREAMFLOW_PROGRAM_ID);
   }
 
-  // === FIX: deteksi log "Instruction: Create" dari program Streamflow ===
-  if (tx.logs) {
-    return tx.logs.some(log => log.includes('Instruction: Create') && log.includes(STREAMFLOW_PROGRAM_ID));
-  }
   return false;
 }
 
@@ -68,23 +74,19 @@ async function sendTelegram(message) {
 const seen = new Map();
 const SEEN_TTL = 1000 * 60 * 45;
 
-// ============== WEBHOOK - TOKEN MINT ==============
+// ============== WEBHOOK MINT ==============
 app.post('/webhook-mint', async (req, res) => {
   const auth = req.headers['authorization'] || req.headers['Authorization'];
   if (AUTH_HEADER && auth !== AUTH_HEADER) return res.status(401).send('Unauthorized');
-
   res.status(200).send('OK');
 
   try {
     const transactions = Array.isArray(req.body) ? req.body : [req.body];
-
     for (const tx of transactions) {
       const mints = extractMints(tx);
-
       for (const mint of mints) {
         if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) continue;
         seen.set(mint, Date.now());
-
         await sendTelegram(`🚀 <b>TOKEN MEME BARU DITEMUKAN!</b>\n\nToken: <code>${mint}</code>\nTx: <code>${tx.signature}</code>`);
         console.log(`[MINT] ${mint} baru ditemukan`);
       }
@@ -94,16 +96,14 @@ app.post('/webhook-mint', async (req, res) => {
   }
 });
 
-// ============== WEBHOOK - STREAMFLOW LOCK ==============
+// ============== WEBHOOK LOCK (FIX) ==============
 app.post('/webhook-lock', async (req, res) => {
   const auth = req.headers['authorization'] || req.headers['Authorization'];
   if (AUTH_HEADER && auth !== AUTH_HEADER) return res.status(401).send('Unauthorized');
-
   res.status(200).send('OK');
 
   try {
     const transactions = Array.isArray(req.body) ? req.body : [req.body];
-
     for (const tx of transactions) {
       if (!isStreamflowLockTx(tx)) continue;
 
