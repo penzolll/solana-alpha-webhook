@@ -25,58 +25,42 @@ function extractMints(tx) {
   return [...mints];
 }
 
-// Streamflow Lock (FIX FINAL)
+// Streamflow Lock (FIX FINAL — match log real Streamflow)
 const lockedMints = new Map();
 
 function isStreamflowLockTx(tx) {
-  if (tx.logs) {
-    return tx.logs.some(log => 
-      log.includes('Instruction: Create') && 
-      log.includes(STREAMFLOW_PROGRAM_ID)
-    );
-  }
-  return false;
+  if (!tx.logs) return false;
+
+  const logs = tx.logs.join('\n');
+
+  // Match log persis dari tx real Streamflow
+  const hasCreateInstruction = logs.includes('Program log: Instruction: Create');
+  const hasMetadata = logs.includes('Creating stream metadata account');
+  const hasEscrow = logs.includes('Creating stream escrow account');
+
+  return hasCreateInstruction && hasMetadata && hasEscrow;
 }
 
-// ============== VAULT PDA AUTO-DECODE (INI YANG BARU) ==============
 function extractLockInfo(tx) {
   if (!tx.logs) return null;
 
   const logs = tx.logs.join('\n');
-  
-  // Mint dari logs
+
+  // Mint (dari token transfer atau log)
   let mint = null;
   const mintMatch = logs.match(/mint.*?([\w\d]{32,44})/i) || (tx.tokenTransfers && tx.tokenTransfers[0]?.mint);
   if (mintMatch) mint = mintMatch[1] || mintMatch;
 
-  // Vault PDA (auto decode!)
+  // Vault (dari log escrow — paling akurat)
   const escrowMatch = logs.match(/Creating stream escrow account.*?([\w\d]{32,44})/i);
   let vault = null;
-  if (escrowMatch) {
-    vault = escrowMatch[1];
-  } else {
-    // Fallback: derive escrow PDA dari metadata (jika ada log metadata)
-    const metaMatch = logs.match(/Creating stream metadata account.*?([\w\d]{32,44})/i);
-    if (metaMatch) {
-      const metadata = metaMatch[1];
-      vault = deriveEscrowPDA(metadata);
-    }
-  }
+  if (escrowMatch) vault = escrowMatch[1];
 
   return {
     mint: mint,
     vault: vault,
     amount: tx.tokenTransfers?.[0]?.tokenAmount || '0'
   };
-}
-
-// Derive escrow PDA (auto)
-function deriveEscrowPDA(metadataPubkey) {
-  if (!metadataPubkey) return null;
-  return Pubkey.findProgramAddressSync(
-    [Buffer.from("strm"), Buffer.from(metadataPubkey, "base64")],
-    new Pubkey(STREAMFLOW_PROGRAM_ID)
-  )[0].toBase58();
 }
 
 async function sendTelegram(message) {
@@ -115,7 +99,7 @@ app.post('/webhook-mint', async (req, res) => {
   }
 });
 
-// ============== WEBHOOK LOCK (AUTO VAULT) ==============
+// ============== WEBHOOK LOCK (AKURAT) ==============
 app.post('/webhook-lock', async (req, res) => {
   const auth = req.headers['authorization'] || req.headers['Authorization'];
   if (AUTH_HEADER && auth !== AUTH_HEADER) return res.status(401).send('Unauthorized');
