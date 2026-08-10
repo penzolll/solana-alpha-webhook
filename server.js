@@ -25,7 +25,7 @@ function extractMints(tx) {
   return [...mints];
 }
 
-// Streamflow Lock (FIX FINAL — pakai log Helius yang selalu ada)
+// Streamflow Lock (FIX FINAL)
 const lockedMints = new Map();
 
 function isStreamflowLockTx(tx) {
@@ -38,18 +38,45 @@ function isStreamflowLockTx(tx) {
   return false;
 }
 
+// ============== VAULT PDA AUTO-DECODE (INI YANG BARU) ==============
 function extractLockInfo(tx) {
-  if (tx.logs) {
-    const logs = tx.logs.join('\n');
-    const mintMatch = logs.match(/mint.*?([\w\d]{32,44})/i) || (tx.tokenTransfers && tx.tokenTransfers[0]?.mint);
-    const vaultMatch = logs.match(/Creating stream escrow account.*?([\w\d]{32,44})/i);
-    return {
-      mint: mintMatch ? mintMatch[1] : null,
-      vault: vaultMatch ? vaultMatch[1] : null,
-      amount: tx.tokenTransfers?.[0]?.tokenAmount || '0'
-    };
+  if (!tx.logs) return null;
+
+  const logs = tx.logs.join('\n');
+  
+  // Mint dari logs
+  let mint = null;
+  const mintMatch = logs.match(/mint.*?([\w\d]{32,44})/i) || (tx.tokenTransfers && tx.tokenTransfers[0]?.mint);
+  if (mintMatch) mint = mintMatch[1] || mintMatch;
+
+  // Vault PDA (auto decode!)
+  const escrowMatch = logs.match(/Creating stream escrow account.*?([\w\d]{32,44})/i);
+  let vault = null;
+  if (escrowMatch) {
+    vault = escrowMatch[1];
+  } else {
+    // Fallback: derive escrow PDA dari metadata (jika ada log metadata)
+    const metaMatch = logs.match(/Creating stream metadata account.*?([\w\d]{32,44})/i);
+    if (metaMatch) {
+      const metadata = metaMatch[1];
+      vault = deriveEscrowPDA(metadata);
+    }
   }
-  return null;
+
+  return {
+    mint: mint,
+    vault: vault,
+    amount: tx.tokenTransfers?.[0]?.tokenAmount || '0'
+  };
+}
+
+// Derive escrow PDA (auto)
+function deriveEscrowPDA(metadataPubkey) {
+  if (!metadataPubkey) return null;
+  return Pubkey.findProgramAddressSync(
+    [Buffer.from("strm"), Buffer.from(metadataPubkey, "base64")],
+    new Pubkey(STREAMFLOW_PROGRAM_ID)
+  )[0].toBase58();
 }
 
 async function sendTelegram(message) {
@@ -88,7 +115,7 @@ app.post('/webhook-mint', async (req, res) => {
   }
 });
 
-// ============== WEBHOOK LOCK (FINAL) ==============
+// ============== WEBHOOK LOCK (AUTO VAULT) ==============
 app.post('/webhook-lock', async (req, res) => {
   const auth = req.headers['authorization'] || req.headers['Authorization'];
   if (AUTH_HEADER && auth !== AUTH_HEADER) return res.status(401).send('Unauthorized');
@@ -103,6 +130,7 @@ app.post('/webhook-lock', async (req, res) => {
       if (!lockInfo || !lockInfo.mint) continue;
 
       const mint = lockInfo.mint;
+      if (!mint) continue;
 
       lockedMints.set(mint, {
         vault: lockInfo.vault,
