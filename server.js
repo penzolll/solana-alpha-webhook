@@ -1,245 +1,128 @@
-require('dotenv').config();
+// MemeSentinel backend - local dev server
+// Purpose: check/scan Solana meme coins
+// Run with: node server.js
+// Listens on http://localhost:3001 (matches extension's "Local dev" setting)
+
 const express = require('express');
-const fetch = require('node-fetch');
+const cors = require('cors');
+const http = require('http');
+const { WebSocketServer } = require('ws');
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+const PORT = process.env.PORT || 3001;
 
-const PORT = process.env.PORT || 3000;
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const AUTH_HEADER = process.env.AUTH_HEADER || 'supersecret123';
+app.use(cors());
+app.use(express.json());
 
-// ============== ANALYZE ==============
-function ageH(p) {
-  if (!p.pairCreatedAt) return null;
-  return (Date.now() - p.pairCreatedAt) / 3.6e6;
-}
+// ---- Status / health endpoints ----
+// Extension's "Test" button might call any of these paths, so we cover the common ones.
+const statusHandler = (req, res) => {
+  res.json({ status: 'ok', service: 'memesentinel-backend', chain: 'solana' });
+};
 
-function analyze(p) {
-  const vol24 = p.volume?.h24 || 0;
-  const vol1h = p.volume?.h1 || 0;
-  const vol5m = p.volume?.m5 || 0;
-  const liq = p.liquidity?.usd || 0;
-  const chg24 = p.priceChange?.h24 ?? 0;
-  const chg1h = p.priceChange?.h1 ?? 0;
-  const chg5m = p.priceChange?.m5 ?? 0;
-  const b24 = p.txns?.h24?.buys || 0;
-  const s24 = p.txns?.h24?.sells || 0;
-  const b1h = p.txns?.h1?.buys || 0;
-  const s1h = p.txns?.h1?.sells || 0;
-  const b5m = p.txns?.m5?.buys || 0;
-  const s5m = p.txns?.m5?.sells || 0;
-  const t24 = b24 + s24;
-  const t1h = b1h + s1h;
-  const t5m = b5m + s5m;
-  const bp24 = t24 > 0 ? b24 / t24 : 0.5;
-  const bp1h = t1h > 0 ? b1h / t1h : 0.5;
-  const bp5m = t5m > 0 ? b5m / t5m : 0.5;
-  const age = ageH(p);
-  const mcap = p.marketCap || p.fdv || 0;
-  const boosts = p.boosts?.active || 0;
+app.get('/', statusHandler);
+app.get('/health', statusHandler);
+app.get('/status', statusHandler);
+app.get('/api/status', statusHandler);
+app.get('/api/health', statusHandler);
+app.get('/ping', statusHandler);
 
-  let score = 40;
-  const pos = [];
-  const neg = [];
-
-  if (t24 >= 25) {
-    if (bp24 >= 0.68) { score += 18; pos.push(`Buy% 24h kuat (${Math.round(bp24 * 100)}%)`); }
-    else if (bp24 >= 0.58) { score += 11; pos.push('Buy% 24h solid'); }
-    else if (bp24 < 0.42) { score -= 14; neg.push('Sell dominance 24h'); }
-  }
-  if (t1h >= 8) {
-    if (bp1h >= 0.65) { score += 12; pos.push('Buy% 1h kuat'); }
-    else if (bp1h < 0.4) { score -= 10; neg.push('Sell dominance 1h'); }
-  }
-  if (t5m >= 4) {
-    if (bp5m >= 0.65) { score += 8; pos.push('Buy% 5m hot'); }
-    else if (bp5m < 0.35) { score -= 8; neg.push('Sell 5m'); }
-  }
-  if (bp24 >= 0.55 && bp1h >= 0.55 && t24 >= 20 && t1h >= 6) {
-    score += 8; pos.push('Pressure multi-TF konsisten');
-  }
-
-  if (vol24 > 20000) {
-    const s1 = vol1h / vol24;
-    const s5 = vol5m / vol24;
-    if (s1 > 0.25 && chg1h > 0) { score += 10; pos.push('Vol 1h accelerating'); }
-    if (s5 > 0.08 && chg5m > 0 && bp5m >= 0.5) { score += 8; pos.push('Burst 5m + buy'); }
-  }
-
-  if (age != null) {
-    if (age < 1.5 && vol24 > 25000 && t24 >= 15) { score += 18; pos.push('Sangat early (<1.5j) + hidup'); }
-    else if (age < 4 && vol24 > 60000) { score += 13; pos.push('Early (<4j)'); }
-    else if (age < 12 && vol24 > 120000) { score += 7; pos.push('Relatif fresh'); }
-    else if (age > 48 && chg24 > 100) { score -= 12; neg.push('Tua + pump besar'); }
-  }
-
-  if (liq >= 100000) { score += 12; pos.push('Liq aman'); }
-  else if (liq >= 35000) score += 8;
-  else if (liq >= 12000) score += 3;
-  else if (liq < 6000) { score -= 18; neg.push('Liq tipis'); }
-  else if (liq < 12000) { score -= 6; neg.push('Liq rendah'); }
-
-  if (chg24 > 12 && chg24 <= 70) { score += 14; pos.push(`Momentum sehat +${chg24.toFixed(0)}%`); }
-  else if (chg24 > 70 && chg24 <= 130) { score += 4; pos.push('Naik, ruang terbatas'); }
-  else if (chg24 > 180) { score -= 16; neg.push('Parabolic late'); }
-  else if (chg24 < -30) { score -= 10; neg.push('Dump 24h'); }
-
-  if (mcap > 0) {
-    if (mcap < 250000 && vol24 > 40000) { score += 11; pos.push('MCap early-stage'); }
-    else if (mcap < 1200000 && vol24 > 80000) score += 5;
-    else if (mcap > 15e6 && chg24 > 40) { score -= 10; neg.push('MCap besar'); }
-  }
-
-  if (boosts >= 5) { score += 7; pos.push('Boost tinggi'); }
-  else if (boosts >= 1) score += 2;
-
-  if (liq < 4000 && vol24 < 15000) score -= 20;
-  if (chg24 > 100 && bp24 < 0.45 && t24 > 20) { score -= 12; neg.push('Pump+sell = distribusi'); }
-
-  score = Math.max(0, Math.min(100, Math.round(score)));
-
-  let verdict = 'SKIP';
-  const hard = neg.some(n => n.includes('tipis') || n.includes('Parabolic') || n.includes('Sell dominance 24h') || n.includes('distribusi'));
-  if (score >= 68 && !hard) verdict = 'ALPHA';
-  else if (score >= 52 && !neg.some(n => n.includes('tipis') || n.includes('Parabolic'))) verdict = 'WATCH';
-
-  return { score, pos, neg, verdict, bp24, bp1h, age, liq, vol24, mcap, chg24 };
-}
-
-// ============== HELPER ==============
-function extractMints(tx) {
-  const mints = new Set();
-
-  if (tx.tokenTransfers) {
-    for (const t of tx.tokenTransfers) {
-      if (
-        t.mint &&
-        t.mint !== 'So11111111111111111111111111111111111111112' &&
-        Number(t.tokenAmount) > 0
-      ) {
-        mints.add(t.mint);
-      }
-    }
-  }
-
-  return [...mints];
-}
-
-async function getDexScreenerPair(mint) {
+// ---- Solana meme coin check ----
+// Uses DexScreener public API (no key required) to pull token info.
+// GET /api/token/:address  -> basic info for a single Solana token/pair
+app.get('/api/token/:address', async (req, res) => {
+  const { address } = req.params;
   try {
-    const res = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${mint}`);
-    if (!res.ok) return null;
-    const pairs = await res.json();
-    if (!Array.isArray(pairs) || pairs.length === 0) return null;
-
-    // Ambil pair dengan liquidity tertinggi
-    pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
-    return pairs[0];
-  } catch (e) {
-    console.error('DexScreener error:', e.message);
-    return null;
-  }
-}
-
-async function sendTelegram(message) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.log('Telegram belum diset, message:', message);
-    return;
-  }
-
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-  await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: TELEGRAM_CHAT_ID,
-      text: message,
-      parse_mode: 'HTML',
-      disable_web_page_preview: false
-    })
-  });
-}
-
-// Cache biar tidak spam token yang sama
-const seen = new Map();
-const SEEN_TTL = 1000 * 60 * 45; // 45 menit
-
-// ============== WEBHOOK ENDPOINT ==============
-app.post('/webhook', async (req, res) => {
-  const auth = req.headers['authorization'] || req.headers['Authorization'];
-  if (AUTH_HEADER && auth !== AUTH_HEADER) {
-    return res.status(401).send('Unauthorized');
-  }
-
-  res.status(200).send('OK');
-
-  try {
-    const transactions = Array.isArray(req.body) ? req.body : [req.body];
-
-    for (const tx of transactions) {
-      const mints = extractMints(tx);
-      if (mints.length === 0) continue;
-
-      for (const mint of mints) {
-        // Skip kalau baru saja diproses
-        if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) continue;
-        seen.set(mint, Date.now());
-
-        const pair = await getDexScreenerPair(mint);
-        if (!pair) continue;
-
-        const a = analyze(pair);
-
-        // ========== FILTER (sudah dilonggarkan) ==========
-        const ageMinutes = a.age !== null ? a.age * 60 : 999;
-        const isEarly = ageMinutes < 90;                 // dilonggarkan jadi 90 menit
-        const isLowMcap = a.mcap > 0 && a.mcap < 150000; // MCap di bawah $150k
-        const isDecentLiq = a.liq >= 2500 && a.liq <= 80000;
-        const hasActivity = a.vol24 > 4000;
-
-        if (
-          isEarly &&
-          isLowMcap &&
-          isDecentLiq &&
-          hasActivity &&
-          a.score >= 55
-        ) {
-          const name = pair.baseToken?.name || 'Unknown';
-          const sym = pair.baseToken?.symbol || '???';
-          const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
-          const ageStr = a.age == null ? '—' : (a.age < 1 ? Math.round(a.age * 60) + 'm' : a.age.toFixed(1) + 'h');
-          const url = pair.url || `https://dexscreener.com/solana/${mint}`;
-
-          const msg = `
-🚀 <b>EARLY · Score ${a.score}</b>
-
-<b>${name}</b> ($${sym})
-💰 ${price}  |  📈 ${a.chg24 >= 0 ? '+' : ''}${a.chg24.toFixed(1)}%
-💧 Liq: $${Math.round(a.liq).toLocaleString()}  |  Vol24: $${Math.round(a.vol24).toLocaleString()}
-⏱ Age: ${ageStr}  |  MCap: $${Math.round(a.mcap).toLocaleString()}
-Buy% 24h: ${Math.round(a.bp24 * 100)}%
-
-🔗 <a href="${url}">DexScreener</a>
-🔗 <a href="https://birdeye.so/token/${mint}?chain=solana">Birdeye</a>
-🔗 <a href="https://rugcheck.xyz/tokens/${mint}">RugCheck</a>
-
-<code>${mint}</code>
-`.trim();
-
-          await sendTelegram(msg);
-          console.log(`[EARLY] ${sym} | Age: ${ageStr} | MCap: ${Math.round(a.mcap)} | Score: ${a.score}`);
-        }
-      }
+    const resp = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${address}`);
+    if (!resp.ok) {
+      return res.status(resp.status).json({ error: 'Failed to fetch token data' });
     }
+    const data = await resp.json();
+
+    const pairs = (data.pairs || []).filter((p) => p.chainId === 'solana');
+    if (pairs.length === 0) {
+      return res.status(404).json({ error: 'No Solana pairs found for this token' });
+    }
+
+    // Use the pair with the highest liquidity as the primary result
+    const best = pairs.sort(
+      (a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0)
+    )[0];
+
+    res.json({
+      address,
+      name: best.baseToken?.name,
+      symbol: best.baseToken?.symbol,
+      priceUsd: best.priceUsd,
+      liquidityUsd: best.liquidity?.usd,
+      fdv: best.fdv,
+      volume24h: best.volume?.h24,
+      priceChange24h: best.priceChange?.h24,
+      pairCreatedAt: best.pairCreatedAt,
+      dexUrl: best.url,
+    });
   } catch (err) {
-    console.error('Webhook process error:', err);
+    console.error('[API] Token check error:', err.message);
+    res.status(500).json({ error: 'Internal error fetching token data' });
   }
 });
 
-app.get('/', (req, res) => res.send('Solana Alpha Webhook is running'));
+// ---- HTTP + WebSocket server ----
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+let connectedClients = 0;
+
+wss.on('connection', (ws) => {
+  connectedClients++;
+  console.log(`[WS] Client connected (total: ${connectedClients})`);
+
+  ws.send(JSON.stringify({ type: 'welcome', message: 'Connected to MemeSentinel backend' }));
+
+  ws.on('message', async (raw) => {
+    let msg;
+    try {
+      msg = JSON.parse(raw.toString());
+    } catch {
+      return ws.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
+    }
+
+    console.log('[WS] Received:', msg);
+
+    // Example protocol: { type: "check", address: "<solana token mint address>" }
+    if (msg.type === 'check' && msg.address) {
+      try {
+        const resp = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${msg.address}`);
+        const data = await resp.json();
+        const pairs = (data.pairs || []).filter((p) => p.chainId === 'solana');
+        const best = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+
+        ws.send(JSON.stringify({
+          type: 'token_result',
+          address: msg.address,
+          data: best || null,
+        }));
+      } catch (err) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Failed to check token' }));
+      }
+    } else {
+      // Default echo for unrecognized message types (useful while debugging protocol)
+      ws.send(JSON.stringify({ type: 'echo', data: msg }));
+    }
+  });
+
+  ws.on('close', () => {
+    connectedClients--;
+    console.log(`[WS] Client disconnected (total: ${connectedClients})`);
+  });
+
+  ws.on('error', (err) => {
+    console.error('[WS] Error:', err.message);
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`MemeSentinel backend running at http://localhost:${PORT}`);
+  console.log(`WebSocket available at ws://localhost:${PORT}`);
+  console.log(`Try: http://localhost:${PORT}/api/token/<solana-token-address>`);
 });
