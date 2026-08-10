@@ -8,9 +8,9 @@ app.use(express.json({ limit: '10mb' }));
 const PORT = process.env.PORT || 3000;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const AUTH_HEADER = process.env.AUTH_HEADER || 'supersecret123';
+const AUTH_HEADER = process.env.AUTH_HEADER || 'supersecret123'; // biar webhook aman
 
-// ============== ANALYZE ==============
+// ============== ANALYZE (diambil & disesuaikan dari Alpha Engine kamu) ==============
 function ageH(p) {
   if (!p.pairCreatedAt) return null;
   return (Date.now() - p.pairCreatedAt) / 3.6e6;
@@ -112,16 +112,31 @@ function analyze(p) {
 function extractMints(tx) {
   const mints = new Set();
 
+  // Dari tokenTransfers
   if (tx.tokenTransfers) {
-    for (const t of tx.tokenTransfers) {
-      if (
-        t.mint &&
-        t.mint !== 'So11111111111111111111111111111111111111112' &&
-        Number(t.tokenAmount) > 0
-      ) {
+    tx.tokenTransfers.forEach(t => {
+      if (t.mint && t.mint !== 'So11111111111111111111111111111111111111112') {
         mints.add(t.mint);
       }
-    }
+    });
+  }
+
+  // Dari accountData tokenBalanceChanges
+  if (tx.accountData) {
+    tx.accountData.forEach(acc => {
+      if (acc.tokenBalanceChanges) {
+        acc.tokenBalanceChanges.forEach(c => {
+          if (c.mint && c.mint !== 'So11111111111111111111111111111111111111112') {
+            mints.add(c.mint);
+          }
+        });
+      }
+    });
+  }
+
+  // Dari events (kadang ada)
+  if (tx.events) {
+    // SWAP biasanya ada di sini
   }
 
   return [...mints];
@@ -163,17 +178,18 @@ async function sendTelegram(message) {
 }
 
 // Cache biar tidak spam token yang sama
-const seen = new Map();
-const SEEN_TTL = 1000 * 60 * 45; // 45 menit
+const seen = new Map(); // mint -> timestamp
+const SEEN_TTL = 1000 * 60 * 30; // 30 menit
 
 // ============== WEBHOOK ENDPOINT ==============
 app.post('/webhook', async (req, res) => {
+  // Security sederhana
   const auth = req.headers['authorization'] || req.headers['Authorization'];
   if (AUTH_HEADER && auth !== AUTH_HEADER) {
     return res.status(401).send('Unauthorized');
   }
 
-  res.status(200).send('OK');
+  res.status(200).send('OK'); // cepat-cepat balas Helius
 
   try {
     const transactions = Array.isArray(req.body) ? req.body : [req.body];
@@ -187,25 +203,19 @@ app.post('/webhook', async (req, res) => {
         if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) continue;
         seen.set(mint, Date.now());
 
+        // Enrich
         const pair = await getDexScreenerPair(mint);
         if (!pair) continue;
 
+        // Filter kasar dulu biar tidak spam
+        const liq = pair.liquidity?.usd || 0;
+        const vol24 = pair.volume?.h24 || 0;
+        if (liq < 3000 && vol24 < 10000) continue;
+
         const a = analyze(pair);
 
-        // ========== FILTER EARLY KETAT ==========
-        const ageMinutes = a.age !== null ? a.age * 60 : 999;
-        const isEarly = ageMinutes < 20;                 // maksimal 20 menit
-        const isLowMcap = a.mcap > 0 && a.mcap < 90000;  // MCap di bawah $90k
-        const isDecentLiq = a.liq >= 3000 && a.liq <= 60000;
-        const hasActivity = a.vol24 > 5000;
-
-        if (
-          isEarly &&
-          isLowMcap &&
-          isDecentLiq &&
-          hasActivity &&
-          a.score >= 58
-        ) {
+        // Hanya kirim yang bagus
+        if (a.verdict === 'ALPHA' || (a.verdict === 'WATCH' && a.score >= 60)) {
           const name = pair.baseToken?.name || 'Unknown';
           const sym = pair.baseToken?.symbol || '???';
           const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
@@ -213,13 +223,12 @@ app.post('/webhook', async (req, res) => {
           const url = pair.url || `https://dexscreener.com/solana/${mint}`;
 
           const msg = `
-🚀 <b>EARLY · Score ${a.score}</b>
+🚀 <b>${a.verdict} · Score ${a.score}</b>
 
 <b>${name}</b> ($${sym})
 💰 ${price}  |  📈 ${a.chg24 >= 0 ? '+' : ''}${a.chg24.toFixed(1)}%
 💧 Liq: $${Math.round(a.liq).toLocaleString()}  |  Vol24: $${Math.round(a.vol24).toLocaleString()}
-⏱ Age: ${ageStr}  |  MCap: $${Math.round(a.mcap).toLocaleString()}
-Buy% 24h: ${Math.round(a.bp24 * 100)}%
+⏱ Age: ${ageStr}  |  Buy% 24h: ${Math.round(a.bp24 * 100)}%
 
 🔗 <a href="${url}">DexScreener</a>
 🔗 <a href="https://birdeye.so/token/${mint}?chain=solana">Birdeye</a>
@@ -229,7 +238,7 @@ Buy% 24h: ${Math.round(a.bp24 * 100)}%
 `.trim();
 
           await sendTelegram(msg);
-          console.log(`[EARLY] ${sym} | Age: ${ageStr} | MCap: ${Math.round(a.mcap)} | Score: ${a.score}`);
+          console.log(`[ALERT] ${a.verdict} ${sym} score=${a.score}`);
         }
       }
     }
