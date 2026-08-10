@@ -192,19 +192,19 @@ app.post('/webhook', async (req, res) => {
 
         const a = analyze(pair);
 
-        // ========== FILTER EARLY KETAT ==========
+        // ========== FILTER (sudah dilonggarkan) ==========
         const ageMinutes = a.age !== null ? a.age * 60 : 999;
-        const isEarly = ageMinutes < 20;                 // maksimal 20 menit
-        const isLowMcap = a.mcap > 0 && a.mcap < 90000;  // MCap di bawah $90k
-        const isDecentLiq = a.liq >= 3000 && a.liq <= 60000;
-        const hasActivity = a.vol24 > 5000;
+        const isEarly = ageMinutes < 90;                 // dilonggarkan jadi 90 menit
+        const isLowMcap = a.mcap > 0 && a.mcap < 150000; // MCap di bawah $150k
+        const isDecentLiq = a.liq >= 2500 && a.liq <= 80000;
+        const hasActivity = a.vol24 > 4000;
 
         if (
           isEarly &&
           isLowMcap &&
           isDecentLiq &&
           hasActivity &&
-          a.score >= 58
+          a.score >= 55
         ) {
           const name = pair.baseToken?.name || 'Unknown';
           const sym = pair.baseToken?.symbol || '???';
