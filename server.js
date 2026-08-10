@@ -11,7 +11,6 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const AUTH_HEADER = process.env.AUTH_HEADER || 'supersecret123';
 
 const STREAMFLOW_PROGRAM_ID = 'strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m';
-const TOKEN_METADATA_PROGRAM_ID = 'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s';
 
 // ============== HELPER ==============
 function extractMints(tx) {
@@ -27,12 +26,18 @@ function extractMints(tx) {
 }
 
 // Streamflow Lock
-const lockedMints = new Map(); // mint -> {vault, amount, txSignature, timestamp}
+const lockedMints = new Map();
 
 function isStreamflowLockTx(tx) {
   if (tx.type === 'CREATE_LOCK_ESCROW') return true;
+
   if (tx.instructions) {
     return tx.instructions.some(i => i.programId === STREAMFLOW_PROGRAM_ID);
+  }
+
+  // === FIX: deteksi log "Instruction: Create" dari program Streamflow ===
+  if (tx.logs) {
+    return tx.logs.some(log => log.includes('Instruction: Create') && log.includes(STREAMFLOW_PROGRAM_ID));
   }
   return false;
 }
@@ -63,7 +68,7 @@ async function sendTelegram(message) {
 const seen = new Map();
 const SEEN_TTL = 1000 * 60 * 45;
 
-// ============== WEBHOOK - TOKEN MINT (HANYA TOKEN BARU) ==============
+// ============== WEBHOOK - TOKEN MINT ==============
 app.post('/webhook-mint', async (req, res) => {
   const auth = req.headers['authorization'] || req.headers['Authorization'];
   if (AUTH_HEADER && auth !== AUTH_HEADER) return res.status(401).send('Unauthorized');
@@ -80,7 +85,6 @@ app.post('/webhook-mint', async (req, res) => {
         if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) continue;
         seen.set(mint, Date.now());
 
-        // ==================== TOKEN BARU MEME ====================
         await sendTelegram(`🚀 <b>TOKEN MEME BARU DITEMUKAN!</b>\n\nToken: <code>${mint}</code>\nTx: <code>${tx.signature}</code>`);
         console.log(`[MINT] ${mint} baru ditemukan`);
       }
@@ -124,7 +128,7 @@ app.post('/webhook-lock', async (req, res) => {
   }
 });
 
-// ============== CHECK LOCKED ==============
+// ============== CHECK ==============
 app.get('/locked', (req, res) => {
   res.json({ locked: Array.from(lockedMints.entries()) });
 });
