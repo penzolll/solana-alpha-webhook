@@ -8,9 +8,10 @@ app.use(express.json({ limit: '10mb' }));
 const PORT = process.env.PORT || 3000;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const AUTH_HEADER = process.env.AUTH_HEADER || 'supersecret123'; // biar webhook aman
+const AUTH_HEADER = process.env.AUTH_HEADER || 'supersecret123';
+const HELIUS_WEBHOOK_ID = process.env.HELIUS_WEBHOOK_ID; // <-- baru
 
-// ============== ANALYZE (diambil & disesuaikan dari Alpha Engine kamu) ==============
+// ============== ANALYZE (tidak berubah) ==============
 function ageH(p) {
   if (!p.pairCreatedAt) return null;
   return (Date.now() - p.pairCreatedAt) / 3.6e6;
@@ -79,7 +80,7 @@ function analyze(p) {
   else if (liq >= 35000) score += 8;
   else if (liq >= 12000) score += 3;
   else if (liq < 6000) { score -= 18; neg.push('Liq tipis'); }
-  else if (liq < 12000) { score -= 6; neg.push('Liq rendah'); }
+  else if (liq < 12000) { score -= 6; neg.push('Liq rendoh'); }
 
   if (chg24 > 12 && chg24 <= 70) { score += 14; pos.push(`Momentum sehat +${chg24.toFixed(0)}%`); }
   else if (chg24 > 70 && chg24 <= 130) { score += 4; pos.push('Naik, ruang terbatas'); }
@@ -111,34 +112,20 @@ function analyze(p) {
 // ============== HELPER ==============
 function extractMints(tx) {
   const mints = new Set();
-
-  // Dari tokenTransfers
   if (tx.tokenTransfers) {
     tx.tokenTransfers.forEach(t => {
-      if (t.mint && t.mint !== 'So11111111111111111111111111111111111111112') {
-        mints.add(t.mint);
-      }
+      if (t.mint && t.mint !== 'So11111111111111111111111111111111111111112') mints.add(t.mint);
     });
   }
-
-  // Dari accountData tokenBalanceChanges
   if (tx.accountData) {
     tx.accountData.forEach(acc => {
       if (acc.tokenBalanceChanges) {
         acc.tokenBalanceChanges.forEach(c => {
-          if (c.mint && c.mint !== 'So11111111111111111111111111111111111111112') {
-            mints.add(c.mint);
-          }
+          if (c.mint && c.mint !== 'So11111111111111111111111111111111111111112') mints.add(c.mint);
         });
       }
     });
   }
-
-  // Dari events (kadang ada)
-  if (tx.events) {
-    // SWAP biasanya ada di sini
-  }
-
   return [...mints];
 }
 
@@ -148,8 +135,6 @@ async function getDexScreenerPair(mint) {
     if (!res.ok) return null;
     const pairs = await res.json();
     if (!Array.isArray(pairs) || pairs.length === 0) return null;
-
-    // Ambil pair dengan liquidity tertinggi
     pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
     return pairs[0];
   } catch (e) {
@@ -160,11 +145,13 @@ async function getDexScreenerPair(mint) {
 
 async function sendTelegram(message) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.log('Telegram belum diset, message:', message);
+    console.log('Telegram belum diset di Railway, message:', message);
     return;
   }
 
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  await new Promise(r => setTimeout(r, 750));
+
   await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -177,44 +164,40 @@ async function sendTelegram(message) {
   });
 }
 
-// Cache biar tidak spam token yang sama
-const seen = new Map(); // mint -> timestamp
-const SEEN_TTL = 1000 * 60 * 30; // 30 menit
+// ============== CACHE 45 MENIT ==============
+const seen = new Map();
+const SEEN_TTL = 1000 * 60 * 45;
 
-// ============== WEBHOOK ENDPOINT ==============
+// ============== WEBHOOK (UPDATED) ==============
 app.post('/webhook', async (req, res) => {
-  // Security sederhana
   const auth = req.headers['authorization'] || req.headers['Authorization'];
-  if (AUTH_HEADER && auth !== AUTH_HEADER) {
-    return res.status(401).send('Unauthorized');
-  }
+  if (AUTH_HEADER && auth !== AUTH_HEADER) return res.status(401).send('Unauthorized');
 
-  res.status(200).send('OK'); // cepat-cepat balas Helius
+  res.status(200).send('OK');
 
   try {
     const transactions = Array.isArray(req.body) ? req.body : [req.body];
 
     for (const tx of transactions) {
+      if (tx.failed || tx.err) continue;
+      if (!tx.tokenTransfers && !tx.accountData) continue;
+
       const mints = extractMints(tx);
       if (mints.length === 0) continue;
 
       for (const mint of mints) {
-        // Skip kalau baru saja diproses
         if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) continue;
         seen.set(mint, Date.now());
 
-        // Enrich
         const pair = await getDexScreenerPair(mint);
         if (!pair) continue;
 
-        // Filter kasar dulu biar tidak spam
         const liq = pair.liquidity?.usd || 0;
         const vol24 = pair.volume?.h24 || 0;
-        if (liq < 3000 && vol24 < 10000) continue;
+        if (liq < 3000 || vol24 < 10000) continue;
 
         const a = analyze(pair);
 
-        // Hanya kirim yang bagus
         if (a.verdict === 'ALPHA' || (a.verdict === 'WATCH' && a.score >= 60)) {
           const name = pair.baseToken?.name || 'Unknown';
           const sym = pair.baseToken?.symbol || '???';
@@ -238,7 +221,7 @@ app.post('/webhook', async (req, res) => {
 `.trim();
 
           await sendTelegram(msg);
-          console.log(`[ALERT] ${a.verdict} ${sym} score=${a.score}`);
+          console.log(`[ALPHA] ${a.verdict} ${sym} score=${a.score}`);
         }
       }
     }
@@ -247,8 +230,8 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => res.send('Solana Alpha Webhook is running'));
+app.get('/', (req, res) => res.send('Solana Alpha Webhook is running on Railway 🚀'));
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
