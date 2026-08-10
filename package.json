@@ -1,13 +1,32 @@
 {
-  "name": "solana-alpha-webhook",
-  "version": "1.0.0",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
+  "url": "solana-alpha-webhook-production.up.railway.app",
+  "webhookType": "enhanced",
+  "webhookRequestType": "json",
+  "triggerType": "transaction",
+  "includeRawTransaction": false,
+  "accountAddresses": [
+    "strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m",
+    "metaqbxx...PuLD5QFeEzBY4uFqVv3k4oJ8X4F8z4z4z4z4z4z4z4"   // Token Metadata Program (opsional, untuk 100% akurat)
+  ],
+  "transactionTypes": [
+    "TOKEN_MINT",
+    "CREATE_LOCK_ESCROW"
+  ],
+  "tokenStandard": ["Fungible"],
+  "includeSignature": true,
+  "includeTokenTransfers": true,
+  "includeTokenBalanceChanges": false,
+  "skipConfirmation": false,
+  "skipPreflight": true,
+  "maxSupportedTransactionVersion": 0,
+  "commitment": "processed",
+  "pollingInterval": 500,
+  "autoPoll": true,
+  "retry": {
+    "maxRetries": 3,
+    "retryDelay": 1000
   },
-  "dependencies": {
-    "express": "^4.19.2",
-    "node-fetch": "^2.7.0",
-    "dotenv": "^16.4.5"
+  "headers": {
+    "Authorization": "supersecret123"
   }
 }
