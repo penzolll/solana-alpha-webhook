@@ -25,36 +25,28 @@ function extractMints(tx) {
   return [...mints];
 }
 
-// Streamflow Lock (FIX 100%)
+// Streamflow Lock (FIX FINAL — pakai log Helius yang selalu ada)
 const lockedMints = new Map();
 
 function isStreamflowLockTx(tx) {
-  // Enhanced tx type
-  if (tx.type === 'CREATE_LOCK_ESCROW') return true;
-
-  // Raw tx + logs (ini yang bikin unlock)
   if (tx.logs) {
     return tx.logs.some(log => 
       log.includes('Instruction: Create') && 
       log.includes(STREAMFLOW_PROGRAM_ID)
     );
   }
-
-  // Fallback: instructions
-  if (tx.instructions) {
-    return tx.instructions.some(i => i.programId === STREAMFLOW_PROGRAM_ID);
-  }
-
   return false;
 }
 
 function extractLockInfo(tx) {
-  if (tx.type === 'CREATE_LOCK_ESCROW') {
-    const escrow = tx.events?.escrow || tx.events?.lock || {};
+  if (tx.logs) {
+    const logs = tx.logs.join('\n');
+    const mintMatch = logs.match(/mint.*?([\w\d]{32,44})/i) || (tx.tokenTransfers && tx.tokenTransfers[0]?.mint);
+    const vaultMatch = logs.match(/Creating stream escrow account.*?([\w\d]{32,44})/i);
     return {
-      mint: escrow.mint || tx.tokenTransfers?.[0]?.mint,
-      vault: escrow.vault || tx.tokenTransfers?.[1]?.mint,
-      amount: escrow.amount || tx.tokenTransfers?.[0]?.tokenAmount || '0'
+      mint: mintMatch ? mintMatch[1] : null,
+      vault: vaultMatch ? vaultMatch[1] : null,
+      amount: tx.tokenTransfers?.[0]?.tokenAmount || '0'
     };
   }
   return null;
@@ -96,7 +88,7 @@ app.post('/webhook-mint', async (req, res) => {
   }
 });
 
-// ============== WEBHOOK LOCK (FIX) ==============
+// ============== WEBHOOK LOCK (FINAL) ==============
 app.post('/webhook-lock', async (req, res) => {
   const auth = req.headers['authorization'] || req.headers['Authorization'];
   if (AUTH_HEADER && auth !== AUTH_HEADER) return res.status(401).send('Unauthorized');
@@ -108,10 +100,9 @@ app.post('/webhook-lock', async (req, res) => {
       if (!isStreamflowLockTx(tx)) continue;
 
       const lockInfo = extractLockInfo(tx);
-      if (!lockInfo) continue;
+      if (!lockInfo || !lockInfo.mint) continue;
 
       const mint = lockInfo.mint;
-      if (!mint) continue;
 
       lockedMints.set(mint, {
         vault: lockInfo.vault,
