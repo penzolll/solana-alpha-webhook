@@ -368,6 +368,20 @@ async function processCandidate(mint, source) {
     return;
   }
 
+  // Top holder tunggal terlalu dominan = risiko dump besar dari 1 wallet
+  const MAX_TOP_HOLDER_PCT = 40;
+  if (rc && rc.topHolderPct != null && rc.topHolderPct > MAX_TOP_HOLDER_PCT) {
+    console.log(`[SKIP-RUGCHECK] ${mint} | topHolderPct=${rc.topHolderPct}% > ${MAX_TOP_HOLDER_PCT}% (konsentrasi ekstrem)`);
+    return;
+  }
+
+  // Skor risiko RugCheck sendiri sudah tinggi (skala mereka: makin tinggi makin berisiko)
+  const MAX_RUGCHECK_RISK = 50;
+  if (rc && rc.riskScore != null && rc.riskScore > MAX_RUGCHECK_RISK) {
+    console.log(`[SKIP-RUGCHECK] ${mint} | riskScore=${rc.riskScore} > ${MAX_RUGCHECK_RISK} (risiko tinggi menurut RugCheck)`);
+    return;
+  }
+
   const name = pair.baseToken?.name || 'Unknown';
   const sym = pair.baseToken?.symbol || '???';
   const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
