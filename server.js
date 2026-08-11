@@ -324,6 +324,7 @@ app.post('/webhook', async (req, res) => {
 
   try {
     const transactions = Array.isArray(req.body) ? req.body : [req.body];
+    console.log(`[WEBHOOK] Diterima ${transactions.length} tx`);
 
     for (const tx of transactions) {
       // Rute 1: event lock Streamflow
@@ -336,15 +337,22 @@ app.post('/webhook', async (req, res) => {
       if (!isNewTokenMintTx(tx)) continue;
 
       const mints = extractMints(tx);
-      if (mints.length === 0) continue;
+      if (mints.length === 0) {
+        console.log(`[SKIP-NO-MINT] sig=${tx.signature} type=${tx.type} tidak ada mint terdeteksi`);
+        continue;
+      }
 
       for (const mint of mints) {
         // Skip kalau baru saja diproses
         if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) continue;
         seen.set(mint, Date.now());
 
+        console.log(`[CANDIDATE] ${mint} - fetching DexScreener...`);
         const pair = await getDexScreenerPair(mint);
-        if (!pair) continue;
+        if (!pair) {
+          console.log(`[SKIP-NO-PAIR] ${mint} belum ada di DexScreener (kemungkinan indexing delay)`);
+          continue;
+        }
 
         const a = analyze(pair);
 
@@ -354,14 +362,15 @@ app.post('/webhook', async (req, res) => {
         const isLowMcap = a.mcap > 0 && a.mcap < 90000;  // MCap di bawah $90k
         const isDecentLiq = a.liq >= 3000 && a.liq <= 60000;
         const hasActivity = a.vol24 > 5000;
+        const passFilter = isEarly && isLowMcap && isDecentLiq && hasActivity && a.score >= 58;
 
-        if (
-          isEarly &&
-          isLowMcap &&
-          isDecentLiq &&
-          hasActivity &&
-          a.score >= 58
-        ) {
+        console.log(
+          `[CHECK] ${pair.baseToken?.symbol || mint} | age=${ageMinutes.toFixed(1)}m(${isEarly}) `
+          + `mcap=${Math.round(a.mcap)}(${isLowMcap}) liq=${Math.round(a.liq)}(${isDecentLiq}) `
+          + `vol24=${Math.round(a.vol24)}(${hasActivity}) score=${a.score}(${a.score >= 58}) -> ${passFilter ? 'LOLOS' : 'SKIP'}`
+        );
+
+        if (passFilter) {
           // ========== HARD GATE: keamanan kontrak (RugCheck) ==========
           // Kalau mint/freeze authority masih aktif, skip total - jangan alert
           // sama sekali. Ini risiko fatal, bukan sekadar poin skor pasar.
