@@ -313,15 +313,31 @@ ${info.amount ? `Jumlah: ${info.amount}\n` : ''}${info.vault ? `Vault: <code>${i
   console.log(`[LOCK] Mint ${info.mint} terdeteksi lock Streamflow`);
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function processCandidate(mint, source) {
   // Skip kalau baru saja diproses (dari sumber mana pun - webhook atau poller)
   if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) return;
   seen.set(mint, Date.now());
 
   console.log(`[CANDIDATE:${source}] ${mint} - fetching DexScreener...`);
-  const pair = await getDexScreenerPair(mint);
+
+  // Retry: token yang baru banget lahir sering belum ke-index DexScreener.
+  // Coba beberapa kali dengan jeda sebelum benar-benar dianggap gagal,
+  // daripada langsung skip permanen di percobaan pertama.
+  const RETRY_DELAYS_MS = [15000, 30000, 45000]; // 15s, 30s, 45s
+  let pair = await getDexScreenerPair(mint);
+
+  for (let i = 0; !pair && i < RETRY_DELAYS_MS.length; i++) {
+    console.log(`[RETRY-PAIR] ${mint} belum ada di DexScreener, coba lagi dalam ${RETRY_DELAYS_MS[i] / 1000}s (percobaan ${i + 1}/${RETRY_DELAYS_MS.length})`);
+    await sleep(RETRY_DELAYS_MS[i]);
+    pair = await getDexScreenerPair(mint);
+  }
+
   if (!pair) {
-    console.log(`[SKIP-NO-PAIR] ${mint} belum ada di DexScreener (kemungkinan indexing delay)`);
+    console.log(`[SKIP-NO-PAIR] ${mint} tetap tidak ada di DexScreener setelah retry`);
     return;
   }
 
