@@ -183,20 +183,28 @@ const SEEN_TTL = 1000 * 60 * 45; // 45 menit
 // State in-memory: mint -> info lock terakhir. Reset kalau server restart (Railway redeploy).
 const lockedMints = new Map();
 
-function isStreamflowLockTx(tx) {
-  // Helius enhanced parser kemungkinan besar TIDAK native-decode Streamflow,
-  // jadi tx.type ini nyaris pasti bakal 'UNKNOWN' - fallback ke cek instruksi mentah
-  // adalah jalur utama yang bisa diandalkan, bukan cadangan.
+// CONFIRMED dari payload nyata (11 Aug 2026): Helius decode Streamflow dengan
+// source: "STREAMFLOW_TIMELOCK" - TIDAK ada di dokumentasi resmi publik Helius,
+// jadi kemungkinan fitur baru yang belum di-dokumentasikan.
+// type: "WITHDRAW" sudah dikonfirmasi = penarikan dari vault yang sudah ada (BUKAN lock baru).
+// type untuk create-lock BELUM dikonfirmasi - dugaan "DEPOSIT" berdasarkan pola source lain
+// (mis. PUMP_AMM yang punya pasangan DEPOSIT/WITHDRAW). Perlu divalidasi kalau ada contoh nyata.
+function isStreamflowTx(tx) {
+  if (tx.source === 'STREAMFLOW_TIMELOCK') return true;
   const ixs = tx.instructions || [];
-  const isStreamflowTx = tx.type === 'CREATE_LOCK_ESCROW' || ixs.some(ix => ix.programId === STREAMFLOW_PROGRAM_ID);
+  return ixs.some(ix => ix.programId === STREAMFLOW_PROGRAM_ID);
+}
 
-  // DEBUG SEMENTARA: cetak payload mentah biar bisa dibedain create-lock vs withdraw.
-  // Hapus baris ini lagi setelah dapat contoh payload-nya.
-  if (isStreamflowTx) {
-    console.log('[DEBUG-STREAMFLOW]', JSON.stringify(tx));
-  }
+function isStreamflowLockTx(tx) {
+  if (!isStreamflowTx(tx)) return false;
 
-  return isStreamflowTx;
+  if (tx.type === 'WITHDRAW') return false; // dikonfirmasi = penarikan, bukan lock baru
+  if (tx.type === 'DEPOSIT') return true;   // dugaan = lock/deposit baru
+
+  // Type Streamflow lain yang belum pernah ketemu - log dulu, jangan alert dulu
+  // biar type-nya bisa dikonfirmasi sebelum dianggap lock beneran.
+  console.log(`[STREAMFLOW-UNKNOWN-TYPE] type="${tx.type}" source="${tx.source}" sig=${tx.signature}`);
+  return false;
 }
 
 function extractLockInfo(tx) {
