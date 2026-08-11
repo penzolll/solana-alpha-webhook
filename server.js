@@ -128,6 +128,20 @@ function extractMints(tx) {
     }
   }
 
+  // Fallback: kadang Helius taruh mint di accountData.tokenBalanceChanges,
+  // bukan (atau selain) di tokenTransfers. Jaring lebih lebar biar tidak
+  // ada tx TOKEN_MINT yang lolos tanpa mint terdeteksi.
+  if (tx.accountData) {
+    for (const acc of tx.accountData) {
+      if (!acc.tokenBalanceChanges) continue;
+      for (const c of acc.tokenBalanceChanges) {
+        if (c.mint && c.mint !== 'So11111111111111111111111111111111111111112') {
+          mints.add(c.mint);
+        }
+      }
+    }
+  }
+
   return [...mints];
 }
 
