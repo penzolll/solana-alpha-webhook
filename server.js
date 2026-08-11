@@ -170,6 +170,55 @@ async function getDexScreenerPair(mint) {
   }
 }
 
+// ============== RUGCHECK (keamanan kontrak) ==============
+// Endpoint publik, tidak butuh API key untuk data dasar.
+// Docs tidak resmi dipublikasikan lengkap - field diambil dari observasi komunitas,
+// jadi parsing dibuat defensif (banyak fallback ?.) biar tidak crash kalau field berubah.
+async function getRugCheckReport(mint) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, {
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    if (!res.ok) return null;
+    const data = await res.json();
+
+    const mintAuthority = data?.token?.mintAuthority || data?.mintAuthority || null;
+    const freezeAuthority = data?.token?.freezeAuthority || data?.freezeAuthority || null;
+
+    // LP locked % - coba beberapa kemungkinan lokasi field, ambil market pertama yang ada datanya
+    let lpLockedPct = null;
+    const markets = data?.markets || [];
+    for (const m of markets) {
+      const pct = m?.lp?.lpLockedPct ?? m?.lp?.lpLockedPercent ?? null;
+      if (pct != null) { lpLockedPct = pct; break; }
+    }
+
+    // Top holder tunggal terbesar (di luar LP/pool), buat deteksi konsentrasi ekstrem
+    const topHolders = data?.topHolders || [];
+    const topHolderPct = topHolders.length > 0 ? (topHolders[0]?.pct || 0) : null;
+
+    const riskScore = data?.score_normalised ?? data?.score ?? null;
+    const risks = (data?.risks || []).map(r => r?.name).filter(Boolean);
+
+    return {
+      mintAuthorityActive: !!mintAuthority,
+      freezeAuthorityActive: !!freezeAuthority,
+      lpLockedPct,
+      topHolderPct,
+      riskScore,
+      risks,
+    };
+  } catch (e) {
+    console.error('RugCheck error:', e.message);
+    return null; // gagal fetch -> jangan block alert, cuma skip info tambahan ini
+  }
+}
+
 async function sendTelegram(message) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     console.log('Telegram belum diset, message:', message);
@@ -313,12 +362,30 @@ app.post('/webhook', async (req, res) => {
           hasActivity &&
           a.score >= 58
         ) {
+          // ========== HARD GATE: keamanan kontrak (RugCheck) ==========
+          // Kalau mint/freeze authority masih aktif, skip total - jangan alert
+          // sama sekali. Ini risiko fatal, bukan sekadar poin skor pasar.
+          const rc = await getRugCheckReport(mint);
+          if (rc && (rc.mintAuthorityActive || rc.freezeAuthorityActive)) {
+            console.log(`[SKIP-RUGCHECK] ${mint} | mintAuth=${rc.mintAuthorityActive} freezeAuth=${rc.freezeAuthorityActive}`);
+            continue;
+          }
+
           const name = pair.baseToken?.name || 'Unknown';
           const sym = pair.baseToken?.symbol || '???';
           const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
           const ageStr = a.age == null ? '—' : (a.age < 1 ? Math.round(a.age * 60) + 'm' : a.age.toFixed(1) + 'h');
           const url = pair.url || `https://dexscreener.com/solana/${mint}`;
-          const lockTag = lockedMints.has(mint) ? '🔒 Locked (Streamflow)' : '🔓 Belum terdeteksi lock';
+          const streamflowTag = lockedMints.has(mint) ? ' + Streamflow' : '';
+
+          // Ringkasan RugCheck buat ditampilkan (kalau fetch berhasil)
+          let rcLine = '⚠️ RugCheck: data tidak tersedia';
+          if (rc) {
+            const lpStr = rc.lpLockedPct != null ? `LP locked ${Math.round(rc.lpLockedPct)}%` : 'LP lock tidak diketahui';
+            const holderStr = rc.topHolderPct != null ? ` | Top holder ${rc.topHolderPct.toFixed(1)}%` : '';
+            const scoreStr = rc.riskScore != null ? ` | Risk ${rc.riskScore}` : '';
+            rcLine = `✅ Mint/Freeze revoked | ${lpStr}${streamflowTag}${holderStr}${scoreStr}`;
+          }
 
           const msg = `
 🚀 <b>EARLY · Score ${a.score}</b>
@@ -328,7 +395,7 @@ app.post('/webhook', async (req, res) => {
 💧 Liq: $${Math.round(a.liq).toLocaleString()}  |  Vol24: $${Math.round(a.vol24).toLocaleString()}
 ⏱ Age: ${ageStr}  |  MCap: $${Math.round(a.mcap).toLocaleString()}
 Buy% 24h: ${Math.round(a.bp24 * 100)}%
-${lockTag}
+${rcLine}
 
 🔗 <a href="${url}">DexScreener</a>
 🔗 <a href="https://birdeye.so/token/${mint}?chain=solana">Birdeye</a>
@@ -338,7 +405,7 @@ ${lockTag}
 `.trim();
 
           await sendTelegram(msg);
-          console.log(`[EARLY] ${sym} | Age: ${ageStr} | MCap: ${Math.round(a.mcap)} | Score: ${a.score} | ${lockTag}`);
+          console.log(`[EARLY] ${sym} | Age: ${ageStr} | MCap: ${Math.round(a.mcap)} | Score: ${a.score} | ${rcLine}`);
         }
       }
     }
