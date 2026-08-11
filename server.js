@@ -10,10 +10,9 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const AUTH_HEADER = process.env.AUTH_HEADER || 'supersecret123';
 
-// Program address resmi
-const TOKEN_METADATA_PROGRAM_ID = 'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s';
-const STREAMFLOW_PROGRAM_ID = 'strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m';
+// Program address
 const PUMPSWAP_PROGRAM_ID = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
+const STREAMFLOW_PROGRAM_ID = 'strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m';
 
 // ============== ANALYZE ==============
 function ageH(p) {
@@ -46,71 +45,61 @@ function analyze(p) {
   const boosts = p.boosts?.active || 0;
 
   let score = 40;
-  const pos = [];
-  const neg = [];
 
   if (t24 >= 25) {
-    if (bp24 >= 0.68) { score += 18; pos.push(`Buy% 24h kuat (${Math.round(bp24 * 100)}%)`); }
-    else if (bp24 >= 0.58) { score += 11; pos.push('Buy% 24h solid'); }
-    else if (bp24 < 0.42) { score -= 14; neg.push('Sell dominance 24h'); }
+    if (bp24 >= 0.68) score += 18;
+    else if (bp24 >= 0.58) score += 11;
+    else if (bp24 < 0.42) score -= 14;
   }
   if (t1h >= 8) {
-    if (bp1h >= 0.65) { score += 12; pos.push('Buy% 1h kuat'); }
-    else if (bp1h < 0.4) { score -= 10; neg.push('Sell dominance 1h'); }
+    if (bp1h >= 0.65) score += 12;
+    else if (bp1h < 0.4) score -= 10;
   }
   if (t5m >= 4) {
-    if (bp5m >= 0.65) { score += 8; pos.push('Buy% 5m hot'); }
-    else if (bp5m < 0.35) { score -= 8; neg.push('Sell 5m'); }
+    if (bp5m >= 0.65) score += 8;
+    else if (bp5m < 0.35) score -= 8;
   }
-  if (bp24 >= 0.55 && bp1h >= 0.55 && t24 >= 20 && t1h >= 6) {
-    score += 8; pos.push('Pressure multi-TF konsisten');
-  }
+  if (bp24 >= 0.55 && bp1h >= 0.55 && t24 >= 20 && t1h >= 6) score += 8;
 
   if (vol24 > 20000) {
     const s1 = vol1h / vol24;
     const s5 = vol5m / vol24;
-    if (s1 > 0.25 && chg1h > 0) { score += 10; pos.push('Vol 1h accelerating'); }
-    if (s5 > 0.08 && chg5m > 0 && bp5m >= 0.5) { score += 8; pos.push('Burst 5m + buy'); }
+    if (s1 > 0.25 && chg1h > 0) score += 10;
+    if (s5 > 0.08 && chg5m > 0 && bp5m >= 0.5) score += 8;
   }
 
   if (age != null) {
-    if (age < 1.5 && vol24 > 25000 && t24 >= 15) { score += 18; pos.push('Sangat early (<1.5j) + hidup'); }
-    else if (age < 4 && vol24 > 60000) { score += 13; pos.push('Early (<4j)'); }
-    else if (age < 12 && vol24 > 120000) { score += 7; pos.push('Relatif fresh'); }
-    else if (age > 48 && chg24 > 100) { score -= 12; neg.push('Tua + pump besar'); }
+    if (age < 1.5 && vol24 > 25000 && t24 >= 15) score += 18;
+    else if (age < 4 && vol24 > 60000) score += 13;
+    else if (age < 12 && vol24 > 120000) score += 7;
+    else if (age > 48 && chg24 > 100) score -= 12;
   }
 
-  if (liq >= 100000) { score += 12; pos.push('Liq aman'); }
+  if (liq >= 100000) score += 12;
   else if (liq >= 35000) score += 8;
   else if (liq >= 12000) score += 3;
-  else if (liq < 6000) { score -= 18; neg.push('Liq tipis'); }
-  else if (liq < 12000) { score -= 6; neg.push('Liq rendah'); }
+  else if (liq < 6000) score -= 18;
+  else if (liq < 12000) score -= 6;
 
-  if (chg24 > 12 && chg24 <= 70) { score += 14; pos.push(`Momentum sehat +${chg24.toFixed(0)}%`); }
-  else if (chg24 > 70 && chg24 <= 130) { score += 4; pos.push('Naik, ruang terbatas'); }
-  else if (chg24 > 180) { score -= 16; neg.push('Parabolic late'); }
-  else if (chg24 < -30) { score -= 10; neg.push('Dump 24h'); }
+  if (chg24 > 12 && chg24 <= 70) score += 14;
+  else if (chg24 > 70 && chg24 <= 130) score += 4;
+  else if (chg24 > 180) score -= 16;
+  else if (chg24 < -30) score -= 10;
 
   if (mcap > 0) {
-    if (mcap < 250000 && vol24 > 40000) { score += 11; pos.push('MCap early-stage'); }
+    if (mcap < 250000 && vol24 > 40000) score += 11;
     else if (mcap < 1200000 && vol24 > 80000) score += 5;
-    else if (mcap > 15e6 && chg24 > 40) { score -= 10; neg.push('MCap besar'); }
+    else if (mcap > 15e6 && chg24 > 40) score -= 10;
   }
 
-  if (boosts >= 5) { score += 7; pos.push('Boost tinggi'); }
+  if (boosts >= 5) score += 7;
   else if (boosts >= 1) score += 2;
 
   if (liq < 4000 && vol24 < 15000) score -= 20;
-  if (chg24 > 100 && bp24 < 0.45 && t24 > 20) { score -= 12; neg.push('Pump+sell = distribusi'); }
+  if (chg24 > 100 && bp24 < 0.45 && t24 > 20) score -= 12;
 
   score = Math.max(0, Math.min(100, Math.round(score)));
-
-  let verdict = 'SKIP';
-  const hard = neg.some(n => n.includes('tipis') || n.includes('Parabolic') || n.includes('Sell dominance 24h') || n.includes('distribusi'));
-  if (score >= 68 && !hard) verdict = 'ALPHA';
-  else if (score >= 52 && !neg.some(n => n.includes('tipis') || n.includes('Parabolic'))) verdict = 'WATCH';
-
-  return { score, pos, neg, verdict, bp24, bp1h, age, liq, vol24, mcap, chg24 };
+  return { score, bp24, age, liq, vol24, mcap, chg24 };
 }
 
 // ============== HELPER ==============
@@ -119,11 +108,7 @@ function extractMints(tx) {
 
   if (tx.tokenTransfers) {
     for (const t of tx.tokenTransfers) {
-      if (
-        t.mint &&
-        t.mint !== 'So11111111111111111111111111111111111111112' &&
-        Number(t.tokenAmount) > 0
-      ) {
+      if (t.mint && t.mint !== 'So11111111111111111111111111111111111111112' && Number(t.tokenAmount) > 0) {
         mints.add(t.mint);
       }
     }
@@ -141,12 +126,6 @@ function extractMints(tx) {
   }
 
   return [...mints];
-}
-
-function isNewTokenMintTx(tx) {
-  if (tx.type === 'TOKEN_MINT') return true;
-  const ixs = tx.instructions || [];
-  return ixs.some(ix => ix.programId === TOKEN_METADATA_PROGRAM_ID);
 }
 
 function isPumpSwapMigrationTx(tx) {
@@ -172,12 +151,8 @@ async function getRugCheckReport(mint) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
-
-    const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, {
-      signal: controller.signal
-    });
+    const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, { signal: controller.signal });
     clearTimeout(timeout);
-
     if (!res.ok) return null;
     const data = await res.json();
 
@@ -185,17 +160,14 @@ async function getRugCheckReport(mint) {
     const freezeAuthority = data?.token?.freezeAuthority || data?.freezeAuthority || null;
 
     let lpLockedPct = null;
-    const markets = data?.markets || [];
-    for (const m of markets) {
+    for (const m of (data?.markets || [])) {
       const pct = m?.lp?.lpLockedPct ?? m?.lp?.lpLockedPercent ?? null;
       if (pct != null) { lpLockedPct = pct; break; }
     }
 
     const topHolders = data?.topHolders || [];
     const topHolderPct = topHolders.length > 0 ? (topHolders[0]?.pct || 0) : null;
-
     const riskScore = data?.score_normalised ?? data?.score ?? null;
-    const risks = (data?.risks || []).map(r => r?.name).filter(Boolean);
 
     return {
       mintAuthorityActive: !!mintAuthority,
@@ -203,7 +175,6 @@ async function getRugCheckReport(mint) {
       lpLockedPct,
       topHolderPct,
       riskScore,
-      risks,
     };
   } catch (e) {
     console.error('RugCheck error:', e.message);
@@ -213,12 +184,10 @@ async function getRugCheckReport(mint) {
 
 async function sendTelegram(message) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.log('Telegram belum diset, message:', message);
+    console.log('Telegram belum diset:', message);
     return;
   }
-
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-  await fetch(url, {
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -231,36 +200,29 @@ async function sendTelegram(message) {
 }
 
 const seen = new Map();
-const SEEN_TTL = 1000 * 60 * 45; // 45 menit
-
+const SEEN_TTL = 1000 * 60 * 45;
 const lockedMints = new Map();
 
 function isStreamflowTx(tx) {
   if (tx.source === 'STREAMFLOW_TIMELOCK') return true;
-  const ixs = tx.instructions || [];
-  return ixs.some(ix => ix.programId === STREAMFLOW_PROGRAM_ID);
+  return (tx.instructions || []).some(ix => ix.programId === STREAMFLOW_PROGRAM_ID);
 }
 
 function isStreamflowLockTx(tx) {
   if (!isStreamflowTx(tx)) return false;
   if (tx.type === 'WITHDRAW') return false;
   if (tx.type === 'DEPOSIT') return true;
-  console.log(`[STREAMFLOW-UNKNOWN-TYPE] type="${tx.type}" source="${tx.source}" sig=${tx.signature}`);
+  console.log(`[STREAMFLOW-UNKNOWN] type=${tx.type} sig=${tx.signature}`);
   return false;
 }
 
 function extractLockInfo(tx) {
-  const transfer = (tx.tokenTransfers || []).find(
-    t => t.mint && t.mint !== 'So11111111111111111111111111111111111111112'
-  );
-
+  const transfer = (tx.tokenTransfers || []).find(t => t.mint && t.mint !== 'So11111111111111111111111111111111111111112');
   const streamflowIx = (tx.instructions || []).find(ix => ix.programId === STREAMFLOW_PROGRAM_ID);
-  const vault = streamflowIx?.accounts?.[0] || null;
-
   return {
     mint: transfer?.mint || null,
     amount: transfer?.tokenAmount || null,
-    vault,
+    vault: streamflowIx?.accounts?.[0] || null,
     signature: tx.signature || null,
   };
 }
@@ -286,74 +248,48 @@ ${info.amount ? `Jumlah: ${info.amount}\n` : ''}${info.vault ? `Vault: <code>${i
 `.trim();
 
   await sendTelegram(msg);
-  console.log(`[LOCK] Mint ${info.mint} terdeteksi lock Streamflow`);
+  console.log(`[LOCK] ${info.mint}`);
 }
 
 function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise(r => setTimeout(r, ms));
 }
 
-async function processCandidate(mint, source) {
+async function processMigration(mint) {
   if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) return;
   seen.set(mint, Date.now());
 
-  console.log(`[CANDIDATE:${source}] ${mint} - fetching DexScreener...`);
+  console.log(`[MIGRATION] ${mint} - fetching data...`);
 
-  const RETRY_DELAYS_MS = [15000, 30000, 45000];
+  // Retry karena kadang belum muncul di DexScreener
+  const delays = [10000, 20000, 30000];
   let pair = await getDexScreenerPair(mint);
-
-  for (let i = 0; !pair && i < RETRY_DELAYS_MS.length; i++) {
-    console.log(`[RETRY-PAIR] ${mint} belum ada di DexScreener, coba lagi dalam ${RETRY_DELAYS_MS[i] / 1000}s`);
-    await sleep(RETRY_DELAYS_MS[i]);
+  for (let i = 0; !pair && i < delays.length; i++) {
+    console.log(`[RETRY] ${mint} belum ada, tunggu ${delays[i]/1000}s`);
+    await sleep(delays[i]);
     pair = await getDexScreenerPair(mint);
   }
 
   if (!pair) {
-    console.log(`[SKIP-NO-PAIR] ${mint} tetap tidak ada di DexScreener setelah retry`);
+    console.log(`[SKIP] ${mint} tidak ditemukan di DexScreener`);
     return;
   }
 
   const a = analyze(pair);
-
-  // Hard gate RugCheck (keamanan)
   const rc = await getRugCheckReport(mint);
+
+  // Hard gate keamanan
   if (rc && (rc.mintAuthorityActive || rc.freezeAuthorityActive)) {
-    console.log(`[SKIP-RUGCHECK] ${mint} | mintAuth=${rc.mintAuthorityActive} freezeAuth=${rc.freezeAuthorityActive}`);
+    console.log(`[SKIP-RUG] ${mint} masih ada mint/freeze authority`);
     return;
   }
-
-  const MAX_TOP_HOLDER_PCT = 40;
-  if (rc && rc.topHolderPct != null && rc.topHolderPct > MAX_TOP_HOLDER_PCT) {
-    console.log(`[SKIP-RUGCHECK] ${mint} | topHolderPct=${rc.topHolderPct}% > ${MAX_TOP_HOLDER_PCT}%`);
+  if (rc && rc.topHolderPct != null && rc.topHolderPct > 40) {
+    console.log(`[SKIP-RUG] ${mint} top holder ${rc.topHolderPct}%`);
     return;
   }
-
-  const MAX_RUGCHECK_RISK = 50;
-  if (rc && rc.riskScore != null && rc.riskScore > MAX_RUGCHECK_RISK) {
-    console.log(`[SKIP-RUGCHECK] ${mint} | riskScore=${rc.riskScore} > ${MAX_RUGCHECK_RISK}`);
+  if (rc && rc.riskScore != null && rc.riskScore > 50) {
+    console.log(`[SKIP-RUG] ${mint} risk score ${rc.riskScore}`);
     return;
-  }
-
-  const isMigration = source === 'pumpswap-migration';
-
-  // Semua migrasi Pump.fun langsung dikirim
-  // Sumber lain tetap pakai filter early
-  if (!isMigration) {
-    const ageMinutes = a.age !== null ? a.age * 60 : 999;
-    const isEarly = ageMinutes < 20;
-    const isLowMcap = a.mcap > 0 && a.mcap < 90000;
-    const isDecentLiq = a.liq >= 3000 && a.liq <= 60000;
-    const hasActivity = a.vol24 > 5000;
-    const passFilter = isEarly && isLowMcap && isDecentLiq && hasActivity && a.score >= 58;
-
-    console.log(
-      `[CHECK:${source}] ${pair.baseToken?.symbol || mint} | age=${ageMinutes.toFixed(1)}m(${isEarly}) ` +
-      `mcap=${Math.round(a.mcap)} liq=${Math.round(a.liq)} vol24=${Math.round(a.vol24)} score=${a.score} -> ${passFilter ? 'LOLOS' : 'SKIP'}`
-    );
-
-    if (!passFilter) return;
-  } else {
-    console.log(`[MIGRATION] ${pair.baseToken?.symbol || mint} | MCap: $${Math.round(a.mcap).toLocaleString()} | Score: ${a.score} → KIRIM SEMUA`);
   }
 
   const name = pair.baseToken?.name || 'Unknown';
@@ -365,24 +301,14 @@ async function processCandidate(mint, source) {
 
   let rcLine = '⚠️ RugCheck: data tidak tersedia';
   if (rc) {
-    const lpStr = rc.lpLockedPct != null ? `LP locked ${Math.round(rc.lpLockedPct)}%` : 'LP lock tidak diketahui';
-    const holderStr = rc.topHolderPct != null ? ` | Top holder ${rc.topHolderPct.toFixed(1)}%` : '';
+    const lpStr = rc.lpLockedPct != null ? `LP locked ${Math.round(rc.lpLockedPct)}%` : 'LP lock ?';
+    const holderStr = rc.topHolderPct != null ? ` | Top ${rc.topHolderPct.toFixed(1)}%` : '';
     const scoreStr = rc.riskScore != null ? ` | Risk ${rc.riskScore}` : '';
     rcLine = `✅ Mint/Freeze revoked | ${lpStr}${streamflowTag}${holderStr}${scoreStr}`;
   }
 
-  const sourceTag = isMigration
-    ? '🎓 Migrasi Pump.fun → PumpSwap'
-    : source === 'rugcheck-poll'
-      ? '🔍 via RugCheck'
-      : '📡 via Helius';
-
-  const title = isMigration
-    ? `🎓 <b>MIGRASI PUMP.FUN</b> · Score ${a.score}`
-    : `🚀 <b>EARLY · Score ${a.score}</b>`;
-
   const msg = `
-${title}  <i>${sourceTag}</i>
+🎓 <b>MIGRASI PUMP.FUN → PUMPSWAP</b> · Score ${a.score}
 
 <b>${name}</b> ($${sym})
 💰 ${price}  |  📈 ${a.chg24 >= 0 ? '+' : ''}${a.chg24.toFixed(1)}%
@@ -399,32 +325,7 @@ ${rcLine}
 `.trim();
 
   await sendTelegram(msg);
-  console.log(`[${isMigration ? 'MIGRATION' : 'EARLY'}:${source}] ${sym} | Age: ${ageStr} | MCap: ${Math.round(a.mcap)} | Score: ${a.score}`);
-}
-
-// ============== POLLING RUGCHECK ==============
-const RUGCHECK_POLL_INTERVAL = 1000 * 60 * 2; // 2 menit
-
-async function pollRugCheckNewTokens() {
-  try {
-    const res = await fetch('https://api.rugcheck.xyz/v1/stats/new_tokens');
-    if (!res.ok) {
-      console.log(`[RUGCHECK-POLL] gagal fetch, status ${res.status}`);
-      return;
-    }
-    const list = await res.json();
-    if (!Array.isArray(list)) return;
-
-    console.log(`[RUGCHECK-POLL] ${list.length} token baru dari RugCheck`);
-
-    for (const item of list) {
-      const mint = item.mint || item.address;
-      if (!mint) continue;
-      await processCandidate(mint, 'rugcheck-poll');
-    }
-  } catch (e) {
-    console.error('[RUGCHECK-POLL] error:', e.message);
-  }
+  console.log(`[SENT] ${sym} | MCap $${Math.round(a.mcap)} | Score ${a.score}`);
 }
 
 // ============== WEBHOOK ==============
@@ -438,41 +339,25 @@ app.post('/webhook', async (req, res) => {
 
   try {
     const transactions = Array.isArray(req.body) ? req.body : [req.body];
-    console.log(`[WEBHOOK] Diterima ${transactions.length} tx`);
+    console.log(`[WEBHOOK] ${transactions.length} tx`);
 
     for (const tx of transactions) {
-      // Streamflow Lock
+      // Streamflow lock (opsional, tetap dipertahankan)
       if (isStreamflowLockTx(tx)) {
         await handleStreamflowLock(tx);
         continue;
       }
 
-      // Token baru (mint)
-      if (isNewTokenMintTx(tx)) {
-        const mints = extractMints(tx);
-        if (mints.length === 0) {
-          console.log(`[SKIP-NO-MINT] sig=${tx.signature} type=${tx.type}`);
-        }
-        for (const mint of mints) {
-          await processCandidate(mint, 'helius-webhook');
-        }
-        continue;
-      }
-
-      // Migrasi Pump.fun → PumpSwap (semua dikirim)
+      // HANYA migrasi Pump.fun → PumpSwap
       if (isPumpSwapMigrationTx(tx)) {
         const mints = extractMints(tx);
-        if (mints.length === 0) {
-          console.log(`[SKIP-NO-MINT] sig=${tx.signature} type=${tx.type} (migration)`);
-        }
         for (const mint of mints) {
-          await processCandidate(mint, 'pumpswap-migration');
+          await processMigration(mint);
         }
-        continue;
       }
     }
   } catch (err) {
-    console.error('Webhook process error:', err);
+    console.error('Webhook error:', err);
   }
 });
 
@@ -481,10 +366,8 @@ app.get('/locked', (req, res) => {
   res.json(list);
 });
 
-app.get('/', (req, res) => res.send('Solana Alpha Webhook is running'));
+app.get('/', (req, res) => res.send('Pump.fun Migration Webhook is running'));
 
 app.listen(PORT, () => {
-  console.log(`🚀 Helius Webhook + Railway running on port ${PORT}`);
-  pollRugCheckNewTokens();
-  setInterval(pollRugCheckNewTokens, RUGCHECK_POLL_INTERVAL);
+  console.log(`🚀 Pump.fun Migration Webhook running on port ${PORT}`);
 });
