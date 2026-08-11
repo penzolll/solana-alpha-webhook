@@ -13,6 +13,10 @@ const AUTH_HEADER = process.env.AUTH_HEADER || 'supersecret123';
 // Program address resmi
 const TOKEN_METADATA_PROGRAM_ID = 'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s';
 const STREAMFLOW_PROGRAM_ID = 'strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m';
+// PumpSwap = AMM resmi Pump.fun sejak Maret 2025 (gantiin Raydium sbg tujuan migrasi).
+// Begitu bonding curve tembus ~$69k mcap, token "graduate" & pool baru dibuat di sini -
+// momen ini biasanya paling ramai karena token baru terbuka buat trading umum.
+const PUMPSWAP_PROGRAM_ID = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
 
 // ============== ANALYZE ==============
 function ageH(p) {
@@ -152,6 +156,15 @@ function isNewTokenMintTx(tx) {
   if (tx.type === 'TOKEN_MINT') return true;
   const ixs = tx.instructions || [];
   return ixs.some(ix => ix.programId === TOKEN_METADATA_PROGRAM_ID);
+}
+
+// Deteksi tx migrasi Pump.fun -> PumpSwap (token "graduate" dari bonding curve).
+// Transaksi migrasi ini berisi instruksi create_pool di program PumpSwap.
+// Momen ini sinyal kuat: token sudah terbukti tembus ~$69k mcap di bonding curve,
+// dan sekarang baru mulai bisa ditradingkan bebas di pool terbuka.
+function isPumpSwapMigrationTx(tx) {
+  const ixs = tx.instructions || [];
+  return ixs.some(ix => ix.programId === PUMPSWAP_PROGRAM_ID);
 }
 
 async function getDexScreenerPair(mint) {
@@ -346,14 +359,21 @@ async function processCandidate(mint, source) {
   // ========== FILTER EARLY KETAT ==========
   const ageMinutes = a.age !== null ? a.age * 60 : 999;
   const isEarly = ageMinutes < 20;                 // maksimal 20 menit
-  const isLowMcap = a.mcap > 0 && a.mcap < 90000;  // MCap di bawah $90k
+
+  // Threshold mcap beda per sumber: migrasi PumpSwap biasanya sudah start
+  // dari ~$69k (graduation), migrasi yang "bagus" cenderung masih di kisaran
+  // $40k saat terdeteksi (belum keburu naik jauh). Token mentah (belum migrasi)
+  // tetap pakai ambang umum $90k.
+  const MCAP_CEILING = source === 'pumpswap-migration' ? 40000 : 90000;
+  const isLowMcap = a.mcap > 0 && a.mcap < MCAP_CEILING;
+
   const isDecentLiq = a.liq >= 3000 && a.liq <= 60000;
   const hasActivity = a.vol24 > 5000;
   const passFilter = isEarly && isLowMcap && isDecentLiq && hasActivity && a.score >= 58;
 
   console.log(
     `[CHECK:${source}] ${pair.baseToken?.symbol || mint} | age=${ageMinutes.toFixed(1)}m(${isEarly}) `
-    + `mcap=${Math.round(a.mcap)}(${isLowMcap}) liq=${Math.round(a.liq)}(${isDecentLiq}) `
+    + `mcap=${Math.round(a.mcap)}/<${MCAP_CEILING}(${isLowMcap}) liq=${Math.round(a.liq)}(${isDecentLiq}) `
     + `vol24=${Math.round(a.vol24)}(${hasActivity}) score=${a.score}(${a.score >= 58}) -> ${passFilter ? 'LOLOS' : 'SKIP'}`
   );
 
@@ -398,7 +418,9 @@ async function processCandidate(mint, source) {
     rcLine = `✅ Mint/Freeze revoked | ${lpStr}${streamflowTag}${holderStr}${scoreStr}`;
   }
 
-  const sourceTag = source === 'rugcheck-poll' ? '🔍 via RugCheck' : '📡 via Helius';
+  const sourceTag = source === 'rugcheck-poll' ? '🔍 via RugCheck'
+    : source === 'pumpswap-migration' ? '🎓 Migrasi PumpSwap'
+    : '📡 via Helius';
 
   const msg = `
 🚀 <b>EARLY · Score ${a.score}</b>  <i>${sourceTag}</i>
@@ -469,16 +491,27 @@ app.post('/webhook', async (req, res) => {
       }
 
       // Rute 2: token baru (hanya diproses kalau memang tx TOKEN_MINT/Token Metadata Program)
-      if (!isNewTokenMintTx(tx)) continue;
-
-      const mints = extractMints(tx);
-      if (mints.length === 0) {
-        console.log(`[SKIP-NO-MINT] sig=${tx.signature} type=${tx.type} tidak ada mint terdeteksi`);
+      if (isNewTokenMintTx(tx)) {
+        const mints = extractMints(tx);
+        if (mints.length === 0) {
+          console.log(`[SKIP-NO-MINT] sig=${tx.signature} type=${tx.type} tidak ada mint terdeteksi`);
+        }
+        for (const mint of mints) {
+          await processCandidate(mint, 'helius-webhook');
+        }
         continue;
       }
 
-      for (const mint of mints) {
-        await processCandidate(mint, 'helius-webhook');
+      // Rute 3: token migrasi Pump.fun -> PumpSwap (graduate dari bonding curve)
+      if (isPumpSwapMigrationTx(tx)) {
+        const mints = extractMints(tx);
+        if (mints.length === 0) {
+          console.log(`[SKIP-NO-MINT] sig=${tx.signature} type=${tx.type} (migration) tidak ada mint terdeteksi`);
+        }
+        for (const mint of mints) {
+          await processCandidate(mint, 'pumpswap-migration');
+        }
+        continue;
       }
     }
   } catch (err) {
