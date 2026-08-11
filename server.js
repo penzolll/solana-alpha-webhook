@@ -187,9 +187,16 @@ function isStreamflowLockTx(tx) {
   // Helius enhanced parser kemungkinan besar TIDAK native-decode Streamflow,
   // jadi tx.type ini nyaris pasti bakal 'UNKNOWN' - fallback ke cek instruksi mentah
   // adalah jalur utama yang bisa diandalkan, bukan cadangan.
-  if (tx.type === 'CREATE_LOCK_ESCROW') return true;
   const ixs = tx.instructions || [];
-  return ixs.some(ix => ix.programId === STREAMFLOW_PROGRAM_ID);
+  const isStreamflowTx = tx.type === 'CREATE_LOCK_ESCROW' || ixs.some(ix => ix.programId === STREAMFLOW_PROGRAM_ID);
+
+  // DEBUG SEMENTARA: cetak payload mentah biar bisa dibedain create-lock vs withdraw.
+  // Hapus baris ini lagi setelah dapat contoh payload-nya.
+  if (isStreamflowTx) {
+    console.log('[DEBUG-STREAMFLOW]', JSON.stringify(tx));
+  }
+
+  return isStreamflowTx;
 }
 
 function extractLockInfo(tx) {
