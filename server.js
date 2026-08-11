@@ -313,6 +313,111 @@ ${info.amount ? `Jumlah: ${info.amount}\n` : ''}${info.vault ? `Vault: <code>${i
   console.log(`[LOCK] Mint ${info.mint} terdeteksi lock Streamflow`);
 }
 
+async function processCandidate(mint, source) {
+  // Skip kalau baru saja diproses (dari sumber mana pun - webhook atau poller)
+  if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) return;
+  seen.set(mint, Date.now());
+
+  console.log(`[CANDIDATE:${source}] ${mint} - fetching DexScreener...`);
+  const pair = await getDexScreenerPair(mint);
+  if (!pair) {
+    console.log(`[SKIP-NO-PAIR] ${mint} belum ada di DexScreener (kemungkinan indexing delay)`);
+    return;
+  }
+
+  const a = analyze(pair);
+
+  // ========== FILTER EARLY KETAT ==========
+  const ageMinutes = a.age !== null ? a.age * 60 : 999;
+  const isEarly = ageMinutes < 20;                 // maksimal 20 menit
+  const isLowMcap = a.mcap > 0 && a.mcap < 90000;  // MCap di bawah $90k
+  const isDecentLiq = a.liq >= 3000 && a.liq <= 60000;
+  const hasActivity = a.vol24 > 5000;
+  const passFilter = isEarly && isLowMcap && isDecentLiq && hasActivity && a.score >= 58;
+
+  console.log(
+    `[CHECK:${source}] ${pair.baseToken?.symbol || mint} | age=${ageMinutes.toFixed(1)}m(${isEarly}) `
+    + `mcap=${Math.round(a.mcap)}(${isLowMcap}) liq=${Math.round(a.liq)}(${isDecentLiq}) `
+    + `vol24=${Math.round(a.vol24)}(${hasActivity}) score=${a.score}(${a.score >= 58}) -> ${passFilter ? 'LOLOS' : 'SKIP'}`
+  );
+
+  if (!passFilter) return;
+
+  // ========== HARD GATE: keamanan kontrak (RugCheck) ==========
+  // Kalau mint/freeze authority masih aktif, skip total - jangan alert
+  // sama sekali. Ini risiko fatal, bukan sekadar poin skor pasar.
+  const rc = await getRugCheckReport(mint);
+  if (rc && (rc.mintAuthorityActive || rc.freezeAuthorityActive)) {
+    console.log(`[SKIP-RUGCHECK] ${mint} | mintAuth=${rc.mintAuthorityActive} freezeAuth=${rc.freezeAuthorityActive}`);
+    return;
+  }
+
+  const name = pair.baseToken?.name || 'Unknown';
+  const sym = pair.baseToken?.symbol || '???';
+  const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
+  const ageStr = a.age == null ? '—' : (a.age < 1 ? Math.round(a.age * 60) + 'm' : a.age.toFixed(1) + 'h');
+  const url = pair.url || `https://dexscreener.com/solana/${mint}`;
+  const streamflowTag = lockedMints.has(mint) ? ' + Streamflow' : '';
+
+  // Ringkasan RugCheck buat ditampilkan (kalau fetch berhasil)
+  let rcLine = '⚠️ RugCheck: data tidak tersedia';
+  if (rc) {
+    const lpStr = rc.lpLockedPct != null ? `LP locked ${Math.round(rc.lpLockedPct)}%` : 'LP lock tidak diketahui';
+    const holderStr = rc.topHolderPct != null ? ` | Top holder ${rc.topHolderPct.toFixed(1)}%` : '';
+    const scoreStr = rc.riskScore != null ? ` | Risk ${rc.riskScore}` : '';
+    rcLine = `✅ Mint/Freeze revoked | ${lpStr}${streamflowTag}${holderStr}${scoreStr}`;
+  }
+
+  const sourceTag = source === 'rugcheck-poll' ? '🔍 via RugCheck' : '📡 via Helius';
+
+  const msg = `
+🚀 <b>EARLY · Score ${a.score}</b>  <i>${sourceTag}</i>
+
+<b>${name}</b> ($${sym})
+💰 ${price}  |  📈 ${a.chg24 >= 0 ? '+' : ''}${a.chg24.toFixed(1)}%
+💧 Liq: $${Math.round(a.liq).toLocaleString()}  |  Vol24: $${Math.round(a.vol24).toLocaleString()}
+⏱ Age: ${ageStr}  |  MCap: $${Math.round(a.mcap).toLocaleString()}
+Buy% 24h: ${Math.round(a.bp24 * 100)}%
+${rcLine}
+
+🔗 <a href="${url}">DexScreener</a>
+🔗 <a href="https://birdeye.so/token/${mint}?chain=solana">Birdeye</a>
+🔗 <a href="https://rugcheck.xyz/tokens/${mint}">RugCheck</a>
+
+<code>${mint}</code>
+`.trim();
+
+  await sendTelegram(msg);
+  console.log(`[EARLY:${source}] ${sym} | Age: ${ageStr} | MCap: ${Math.round(a.mcap)} | Score: ${a.score} | ${rcLine}`);
+}
+
+// ============== POLLING RUGCHECK (sumber deteksi kedua, independen dari webhook) ==============
+// RugCheck listing token baru terdeteksi di sistem mereka - lebih luas cakupannya
+// karena tidak tergantung konfigurasi webhook Helius kamu.
+const RUGCHECK_POLL_INTERVAL = 1000 * 60 * 2; // tiap 2 menit
+
+async function pollRugCheckNewTokens() {
+  try {
+    const res = await fetch('https://api.rugcheck.xyz/v1/stats/new_tokens');
+    if (!res.ok) {
+      console.log(`[RUGCHECK-POLL] gagal fetch, status ${res.status}`);
+      return;
+    }
+    const list = await res.json();
+    if (!Array.isArray(list)) return;
+
+    console.log(`[RUGCHECK-POLL] ${list.length} token baru dari RugCheck`);
+
+    for (const item of list) {
+      const mint = item.mint || item.address;
+      if (!mint) continue;
+      await processCandidate(mint, 'rugcheck-poll');
+    }
+  } catch (e) {
+    console.error('[RUGCHECK-POLL] error:', e.message);
+  }
+}
+
 // ============== WEBHOOK ENDPOINT ==============
 app.post('/webhook', async (req, res) => {
   const auth = req.headers['authorization'] || req.headers['Authorization'];
@@ -343,79 +448,7 @@ app.post('/webhook', async (req, res) => {
       }
 
       for (const mint of mints) {
-        // Skip kalau baru saja diproses
-        if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) continue;
-        seen.set(mint, Date.now());
-
-        console.log(`[CANDIDATE] ${mint} - fetching DexScreener...`);
-        const pair = await getDexScreenerPair(mint);
-        if (!pair) {
-          console.log(`[SKIP-NO-PAIR] ${mint} belum ada di DexScreener (kemungkinan indexing delay)`);
-          continue;
-        }
-
-        const a = analyze(pair);
-
-        // ========== FILTER EARLY KETAT ==========
-        const ageMinutes = a.age !== null ? a.age * 60 : 999;
-        const isEarly = ageMinutes < 20;                 // maksimal 20 menit
-        const isLowMcap = a.mcap > 0 && a.mcap < 90000;  // MCap di bawah $90k
-        const isDecentLiq = a.liq >= 3000 && a.liq <= 60000;
-        const hasActivity = a.vol24 > 5000;
-        const passFilter = isEarly && isLowMcap && isDecentLiq && hasActivity && a.score >= 58;
-
-        console.log(
-          `[CHECK] ${pair.baseToken?.symbol || mint} | age=${ageMinutes.toFixed(1)}m(${isEarly}) `
-          + `mcap=${Math.round(a.mcap)}(${isLowMcap}) liq=${Math.round(a.liq)}(${isDecentLiq}) `
-          + `vol24=${Math.round(a.vol24)}(${hasActivity}) score=${a.score}(${a.score >= 58}) -> ${passFilter ? 'LOLOS' : 'SKIP'}`
-        );
-
-        if (passFilter) {
-          // ========== HARD GATE: keamanan kontrak (RugCheck) ==========
-          // Kalau mint/freeze authority masih aktif, skip total - jangan alert
-          // sama sekali. Ini risiko fatal, bukan sekadar poin skor pasar.
-          const rc = await getRugCheckReport(mint);
-          if (rc && (rc.mintAuthorityActive || rc.freezeAuthorityActive)) {
-            console.log(`[SKIP-RUGCHECK] ${mint} | mintAuth=${rc.mintAuthorityActive} freezeAuth=${rc.freezeAuthorityActive}`);
-            continue;
-          }
-
-          const name = pair.baseToken?.name || 'Unknown';
-          const sym = pair.baseToken?.symbol || '???';
-          const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
-          const ageStr = a.age == null ? '—' : (a.age < 1 ? Math.round(a.age * 60) + 'm' : a.age.toFixed(1) + 'h');
-          const url = pair.url || `https://dexscreener.com/solana/${mint}`;
-          const streamflowTag = lockedMints.has(mint) ? ' + Streamflow' : '';
-
-          // Ringkasan RugCheck buat ditampilkan (kalau fetch berhasil)
-          let rcLine = '⚠️ RugCheck: data tidak tersedia';
-          if (rc) {
-            const lpStr = rc.lpLockedPct != null ? `LP locked ${Math.round(rc.lpLockedPct)}%` : 'LP lock tidak diketahui';
-            const holderStr = rc.topHolderPct != null ? ` | Top holder ${rc.topHolderPct.toFixed(1)}%` : '';
-            const scoreStr = rc.riskScore != null ? ` | Risk ${rc.riskScore}` : '';
-            rcLine = `✅ Mint/Freeze revoked | ${lpStr}${streamflowTag}${holderStr}${scoreStr}`;
-          }
-
-          const msg = `
-🚀 <b>EARLY · Score ${a.score}</b>
-
-<b>${name}</b> ($${sym})
-💰 ${price}  |  📈 ${a.chg24 >= 0 ? '+' : ''}${a.chg24.toFixed(1)}%
-💧 Liq: $${Math.round(a.liq).toLocaleString()}  |  Vol24: $${Math.round(a.vol24).toLocaleString()}
-⏱ Age: ${ageStr}  |  MCap: $${Math.round(a.mcap).toLocaleString()}
-Buy% 24h: ${Math.round(a.bp24 * 100)}%
-${rcLine}
-
-🔗 <a href="${url}">DexScreener</a>
-🔗 <a href="https://birdeye.so/token/${mint}?chain=solana">Birdeye</a>
-🔗 <a href="https://rugcheck.xyz/tokens/${mint}">RugCheck</a>
-
-<code>${mint}</code>
-`.trim();
-
-          await sendTelegram(msg);
-          console.log(`[EARLY] ${sym} | Age: ${ageStr} | MCap: ${Math.round(a.mcap)} | Score: ${a.score} | ${rcLine}`);
-        }
+        await processCandidate(mint, 'helius-webhook');
       }
     }
   } catch (err) {
@@ -433,4 +466,7 @@ app.get('/', (req, res) => res.send('Solana Alpha Webhook is running'));
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  // Mulai polling RugCheck sebagai sumber deteksi kedua
+  pollRugCheckNewTokens();
+  setInterval(pollRugCheckNewTokens, RUGCHECK_POLL_INTERVAL);
 });
