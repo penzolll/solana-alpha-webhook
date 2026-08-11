@@ -1,129 +1,114 @@
-require('dotenv').config();
-const express = require('express');
-const fetch = require('node-fetch');
-const app = express();
-app.use(express.json({ limit: '10mb' }));
+async function processCandidate(mint, source) {
+  // Skip kalau baru saja diproses
+  if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) return;
+  seen.set(mint, Date.now());
 
-const PORT = process.env.PORT || 3000;
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const AUTH_HEADER = process.env.AUTH_HEADER || 'supersecret123';
+  console.log(`[CANDIDATE:${source}] ${mint} - fetching DexScreener...`);
 
-const TOKEN_METADATA_PROGRAM_ID = 'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s';
-const PUMPSWAP_PROGRAM_ID = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
-const STREAMFLOW_PROGRAM_ID = 'strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m';
+  // Retry DexScreener (token baru sering belum ke-index)
+  const RETRY_DELAYS_MS = [15000, 30000, 45000];
+  let pair = await getDexScreenerPair(mint);
 
-function ageH(p) {
-  if (!p.pairCreatedAt) return null;
-  return (Date.now() - p.pairCreatedAt) / 3.6e6;
-}
-
-function analyze(p) {
-  // ... (analisa kamu sudah sama, saya tidak ubah karena sudah bagus)
-  // (saya skip bagian panjang untuk hemat ruang, tapi tetap sama)
-  // ... (copy paste fungsi analyze kamu yang lama)
-}
-
-const oneMinuteCandles = new Map(); // mint -> { firstPrice, lastPrice, time }
-const seen = new Map();
-const SEEN_TTL = 1000 * 60 * 45;
-
-// ============== SKIP 150-1000% CANDLE + MIGRATION NOTIF ==============
-function isFirstCandleBig(mint) {
-  const now = Date.now();
-  const candleData = oneMinuteCandles.get(mint);
-  if (!candleData) return false;
-
-  const timePassed = now - candleData.time;
-  if (timePassed < 60_000) return false;
-
-  const change = ((candleData.lastPrice - candleData.firstPrice) / candleData.firstPrice) * 100;
-  if (change >= 150 && change <= 1000) {
-    console.log(`[SKIP-150-1000%] ${mint} | +${change.toFixed(1)}% dalam 60 detik`);
-    return true;
+  for (let i = 0; !pair && i < RETRY_DELAYS_MS.length; i++) {
+    console.log(`[RETRY-PAIR] ${mint} belum ada di DexScreener, coba lagi dalam ${RETRY_DELAYS_MS[i] / 1000}s`);
+    await sleep(RETRY_DELAYS_MS[i]);
+    pair = await getDexScreenerPair(mint);
   }
-  return false;
-}
 
-function sendMigrationAlert(tx) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
-  const mints = extractMints(tx);
-  if (mints.length === 0) return;
-
-  const url = `https://solscan.io/tx/${tx.signature}`;
-  const msg = `🎉 <b>MIGRATION PUMPSWAP DETEKSI</b>\nMint: <code>${mints[0]}</code>\n<a href="${url}">Solscan</a>`;
-  fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: msg, parse_mode: 'HTML' })
-  });
-}
-
-// helper extractMints & isNewTokenMintTx & isStreamflowLockTx (tetap sama)
-function extractMints(tx) { /* ... sama seperti sebelumnya */ }
-function isNewTokenMintTx(tx) { /* ... */ }
-function isStreamflowLockTx(tx) { /* ... */ }
-function handleStreamflowLock(tx) { /* ... */ }
-
-// ... (semua fungsi lain kamu tetap sama: analyze, getDexScreenerPair, getRugCheckReport, processCandidate, etc.)
-
-// Rute webhook (sudah di-update)
-app.post('/webhook', async (req, res) => {
-  if (AUTH_HEADER && req.headers.authorization !== AUTH_HEADER) {
-    return res.status(401).send('Unauthorized');
+  if (!pair) {
+    console.log(`[SKIP-NO-PAIR] ${mint} tetap tidak ada di DexScreener setelah retry`);
+    return;
   }
-  res.status(200).send('OK');
 
-  try {
-    const transactions = Array.isArray(req.body) ? req.body : [req.body];
+  const a = analyze(pair);
 
-    for (const tx of transactions) {
-      if (isStreamflowLockTx(tx)) {
-        await handleStreamflowLock(tx);
-        continue;
-      }
-
-      if (isNewTokenMintTx(tx)) {
-        const mints = extractMints(tx);
-        for (const mint of mints) {
-          await processCandidate(mint, 'helius-webhook');
-        }
-        continue;
-      }
-
-      if (isPumpSwapMigrationTx(tx)) {
-        const mints = extractMints(tx);
-
-        for (const mint of mints) {
-          if (isFirstCandleBig(mint)) {
-            console.log(`[SKIP-150-1000%] ${mint} — candle besar, SKIP total`);
-            continue;
-          }
-          await processCandidate(mint, 'pumpswap-migration');
-        }
-
-        // NOTIFIKASI MIGRATION (meskipun skip)
-        sendMigrationAlert(tx);
-        continue;
-      }
-    }
-  } catch (err) {
-    console.error('Webhook error:', err);
+  // ========== HARD GATE: keamanan kontrak (RugCheck) ==========
+  const rc = await getRugCheckReport(mint);
+  if (rc && (rc.mintAuthorityActive || rc.freezeAuthorityActive)) {
+    console.log(`[SKIP-RUGCHECK] ${mint} | mintAuth=${rc.mintAuthorityActive} freezeAuth=${rc.freezeAuthorityActive}`);
+    return;
   }
-});
 
-// Polling RugCheck + setInterval reset candle
-// ... (sama seperti sebelumnya)
+  // Top holder terlalu dominan
+  const MAX_TOP_HOLDER_PCT = 40;
+  if (rc && rc.topHolderPct != null && rc.topHolderPct > MAX_TOP_HOLDER_PCT) {
+    console.log(`[SKIP-RUGCHECK] ${mint} | topHolderPct=${rc.topHolderPct}% > ${MAX_TOP_HOLDER_PCT}%`);
+    return;
+  }
 
-app.listen(PORT, () => {
-  console.log(`🚀 Helius Webhook + Railway running on port ${PORT}`);
-  pollRugCheckNewTokens();
-  setInterval(pollRugCheckNewTokens, 120000);
-  // Reset candle setiap 65 detik
-  setInterval(() => {
-    const now = Date.now();
-    for (const [mint, data] of oneMinuteCandles) {
-      if (now - data.time > 65_000) oneMinuteCandles.delete(mint);
-    }
-  }, 60000);
-});
+  // Risk score terlalu tinggi
+  const MAX_RUGCHECK_RISK = 50;
+  if (rc && rc.riskScore != null && rc.riskScore > MAX_RUGCHECK_RISK) {
+    console.log(`[SKIP-RUGCHECK] ${mint} | riskScore=${rc.riskScore} > ${MAX_RUGCHECK_RISK}`);
+    return;
+  }
+
+  // ========== LOGIKA ALERT ==========
+  const isMigration = source === 'pumpswap-migration';
+
+  // Untuk migrasi Pump.fun → selalu kirim alert
+  // Untuk sumber lain → tetap pakai filter early ketat
+  if (!isMigration) {
+    const ageMinutes = a.age !== null ? a.age * 60 : 999;
+    const isEarly = ageMinutes < 20;
+    const isLowMcap = a.mcap > 0 && a.mcap < 90000;
+    const isDecentLiq = a.liq >= 3000 && a.liq <= 60000;
+    const hasActivity = a.vol24 > 5000;
+    const passFilter = isEarly && isLowMcap && isDecentLiq && hasActivity && a.score >= 58;
+
+    console.log(
+      `[CHECK:${source}] ${pair.baseToken?.symbol || mint} | age=${ageMinutes.toFixed(1)}m(${isEarly}) ` +
+      `mcap=${Math.round(a.mcap)} liq=${Math.round(a.liq)} vol24=${Math.round(a.vol24)} score=${a.score} -> ${passFilter ? 'LOLOS' : 'SKIP'}`
+    );
+
+    if (!passFilter) return;
+  } else {
+    console.log(`[MIGRATION] ${pair.baseToken?.symbol || mint} | MCap: $${Math.round(a.mcap).toLocaleString()} | Score: ${a.score} → KIRIM SEMUA`);
+  }
+
+  // ========== FORMAT PESAN ==========
+  const name = pair.baseToken?.name || 'Unknown';
+  const sym = pair.baseToken?.symbol || '???';
+  const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
+  const ageStr = a.age == null ? '—' : (a.age < 1 ? Math.round(a.age * 60) + 'm' : a.age.toFixed(1) + 'h');
+  const url = pair.url || `https://dexscreener.com/solana/${mint}`;
+  const streamflowTag = lockedMints.has(mint) ? ' + Streamflow' : '';
+
+  let rcLine = '⚠️ RugCheck: data tidak tersedia';
+  if (rc) {
+    const lpStr = rc.lpLockedPct != null ? `LP locked ${Math.round(rc.lpLockedPct)}%` : 'LP lock tidak diketahui';
+    const holderStr = rc.topHolderPct != null ? ` | Top holder ${rc.topHolderPct.toFixed(1)}%` : '';
+    const scoreStr = rc.riskScore != null ? ` | Risk ${rc.riskScore}` : '';
+    rcLine = `✅ Mint/Freeze revoked | ${lpStr}${streamflowTag}${holderStr}${scoreStr}`;
+  }
+
+  const sourceTag = isMigration
+    ? '🎓 Migrasi Pump.fun → PumpSwap'
+    : source === 'rugcheck-poll'
+      ? '🔍 via RugCheck'
+      : '📡 via Helius';
+
+  const title = isMigration
+    ? `🎓 <b>MIGRASI PUMP.FUN</b> · Score ${a.score}`
+    : `🚀 <b>EARLY · Score ${a.score}</b>`;
+
+  const msg = `
+${title}  <i>${sourceTag}</i>
+
+<b>${name}</b> ($${sym})
+💰 ${price}  |  📈 ${a.chg24 >= 0 ? '+' : ''}${a.chg24.toFixed(1)}%
+💧 Liq: $${Math.round(a.liq).toLocaleString()}  |  Vol24: $${Math.round(a.vol24).toLocaleString()}
+⏱ Age: ${ageStr}  |  MCap: $${Math.round(a.mcap).toLocaleString()}
+Buy% 24h: ${Math.round(a.bp24 * 100)}%
+${rcLine}
+
+🔗 <a href="${url}">DexScreener</a>
+🔗 <a href="https://birdeye.so/token/${mint}?chain=solana">Birdeye</a>
+🔗 <a href="https://rugcheck.xyz/tokens/${mint}">RugCheck</a>
+
+<code>${mint}</code>
+`.trim();
+
+  await sendTelegram(msg);
+  console.log(`[${isMigration ? 'MIGRATION' : 'EARLY'}:${source}] ${sym} | Age: ${ageStr} | MCap: ${Math.round(a.mcap)} | Score: ${a.score}`);
+}
