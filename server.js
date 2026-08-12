@@ -283,10 +283,6 @@ async function processMigration(mint) {
     console.log(`[SKIP-RUG] ${mint} masih ada mint/freeze authority`);
     return;
   }
-  if (rc && rc.topHolderPct != null && rc.topHolderPct > 40) {
-    console.log(`[SKIP-RUG] ${mint} top holder ${rc.topHolderPct}%`);
-    return;
-  }
   if (rc && rc.riskScore != null && rc.riskScore > 50) {
     console.log(`[SKIP-RUG] ${mint} risk score ${rc.riskScore}`);
     return;
