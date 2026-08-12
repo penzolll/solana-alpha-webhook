@@ -8,9 +8,8 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const AUTH_HEADER = process.env.AUTH_HEADER || 'supersecret123';
 
-// Program address (updated)
+// Program address (sudah dioptimasi)
 const PUMPFUN_PROGRAM_ID = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
-const PUMPSWAP_PROGRAM_ID = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
 const PUMPFUN_MIGRATION_PROGRAM_ID = '39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg';
 const STREAMFLOW_PROGRAM_ID = 'strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m';
 
@@ -39,15 +38,10 @@ function extractMints(tx) {
 
 function isPumpfunMigrationTx(tx) {
   const ixs = tx.instructions || [];
-  return ixs.some(ix => 
+  return ixs.some(ix =>
     (ix.programId === PUMPFUN_PROGRAM_ID && ix.name === 'migrate') ||
     ix.programId === PUMPFUN_MIGRATION_PROGRAM_ID
   );
-}
-
-function isPumpSwapCreatePoolTx(tx) {
-  const ixs = tx.instructions || [];
-  return ixs.some(ix => ix.programId === PUMPSWAP_PROGRAM_ID && ix.name === 'create_pool');
 }
 
 async function getDexScreenerPair(mint) {
@@ -230,7 +224,7 @@ app.post('/webhook', async (req, res) => {
         continue;
       }
 
-      if (isPumpSwapCreatePoolTx(tx) || isPumpfunMigrationTx(tx)) {
+      if (isPumpfunMigrationTx(tx)) {
         const mints = extractMints(tx);
         for (const mint of mints) {
           await processMigration(mint);
@@ -250,5 +244,5 @@ app.get('/locked', (req, res) => {
 app.get('/', (req, res) => res.send('Pump.fun Migration Webhook running — ONLY Pump.fun Migration sekarang aktif'));
 
 app.listen(PORT, () => {
-  console.log(`🚀 Pump.fun Migration Webhook running on port ${PORT} (sudah diupdate)`);
+  console.log(`🚀 Pump.fun Migration Webhook running on port ${PORT} (sudah dioptimasi)`);
 });
