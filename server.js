@@ -8,9 +8,10 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const AUTH_HEADER = process.env.AUTH_HEADER || 'supersecret123';
 
-// Program address
+// Program address (dari webhook kamu)
 const PUMPSWAP_PROGRAM_ID = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
 const STREAMFLOW_PROGRAM_ID = 'strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m';
+const PUMP_PROGRAM_ID = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 
 // ============== HELPER ==============
 function extractMints(tx) {
@@ -37,7 +38,12 @@ function extractMints(tx) {
 
 function isPumpSwapMigrationTx(tx) {
   const ixs = tx.instructions || [];
-  return ixs.some(ix => ix.programId === PUMPSWAP_PROGRAM_ID);
+  return ixs.some(ix => ix.programId === PUMP_PROGRAM_ID && ix.name === 'migrate');
+}
+
+function isPumpSwapCreatePoolTx(tx) {
+  const ixs = tx.instructions || [];
+  return ixs.some(ix => ix.programId === PUMPSWAP_PROGRAM_ID && ix.name === 'create_pool');
 }
 
 async function getDexScreenerPair(mint) {
@@ -220,6 +226,14 @@ app.post('/webhook', async (req, res) => {
         await handleStreamflowLock(tx);
         continue;
       }
+
+      if (isPumpSwapCreatePoolTx(tx)) {
+        const mints = extractMints(tx);
+        for (const mint of mints) {
+          await processMigration(mint);
+        }
+      }
+
       if (isPumpSwapMigrationTx(tx)) {
         const mints = extractMints(tx);
         for (const mint of mints) {
@@ -237,7 +251,7 @@ app.get('/locked', (req, res) => {
   res.json(list);
 });
 
-app.get('/', (req, res) => res.send('Pump.fun Migration Webhook is running (no quality filter)'));
+app.get('/', (req, res) => res.send('Pump.fun Migration Webhook running — CREATE_POOL + MIGRATE sekarang aktif'));
 
 app.listen(PORT, () => {
   console.log(`🚀 Pump.fun Migration Webhook running on port ${PORT}`);
