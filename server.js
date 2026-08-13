@@ -1,6 +1,10 @@
 require('dotenv').config();
 const express = require('express');
-const fetch = require('node-fetch');
+// Hapus: const fetch = require('node-fetch');
+// Node 18+ sudah punya fetch native
+
+const app = express();
+app.use(express.json({ limit: '10mb' }));
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
