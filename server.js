@@ -98,7 +98,7 @@ async function sendTelegram(message) {
   });
 }
 
-// ============== FLUXRPC (PUMP.FUN ONLY) ==============
+// ============== FLUXRPC (Free Plan + Pump.fun only) ==============
 const FLUXRPC_BASE_URL = `https://eu.fluxrpc.com/?key=${FLUXRPC_API_KEY}`;
 
 // Cache anti-spam
@@ -138,8 +138,7 @@ app.post('/webhook', async (req, res) => {
         const scoreOK = a.score >= 62;
 
         if (isEarly && isLowMcap && isDecentLiq && hasActivity && scoreOK) {
-          console.log(`[PUMP.FUN ONLY] EARLY DETECTED: ${pair.baseToken?.symbol} | Age: ${ageMinutes}m`);
-          // Kirim Telegram (kode lama kamu)
+          console.log(`[PUMP.FUN ONLY - Free] EARLY DETECTED: ${pair.baseToken?.symbol} | Age: ${ageMinutes}m`);
         }
       }
     }
@@ -157,6 +156,5 @@ process.on('SIGTERM', () => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log('FluxRPC aktif: https://eu.fluxrpc.com');
-  console.log('Filter: Pump.fun saja ✓');
+  console.log('FluxRPC Free Plan aktif: https://eu.fluxrpc.com');
 });
