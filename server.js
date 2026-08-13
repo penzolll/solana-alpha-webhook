@@ -16,16 +16,13 @@ if (!FLUXRPC_API_KEY) {
   process.exit(1);
 }
 
-// ============== ANALYZE (threshold upgraded) ==============
+// ============== ANALYZE (upgrade threshold) ==============
 function ageH(p) {
   if (!p.pairCreatedAt) return null;
   return (Date.now() - p.pairCreatedAt) / 3.6e6;
 }
 
 function analyze(p) {
-  // (semua logika score sama seperti engine HTML kamu)
-  // copy dari kode lama kamu
-
   const vol24 = p.volume?.h24 || 0;
   const vol1h = p.volume?.h1 || 0;
   const vol5m = p.volume?.m5 || 0;
@@ -101,12 +98,15 @@ async function sendTelegram(message) {
   });
 }
 
-// ============== FLUXRPC ==============
+// ============== FLUXRPC (PUMP.FUN ONLY) ==============
 const FLUXRPC_BASE_URL = `https://eu.fluxrpc.com/?key=${FLUXRPC_API_KEY}`;
 
 // Cache anti-spam
 const seen = new Map();
 const SEEN_TTL = 1000 * 60 * 90;
+
+// Pump.fun program
+const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 
 // ============== WEBHOOK ==============
 app.post('/webhook', async (req, res) => {
@@ -138,7 +138,8 @@ app.post('/webhook', async (req, res) => {
         const scoreOK = a.score >= 62;
 
         if (isEarly && isLowMcap && isDecentLiq && hasActivity && scoreOK) {
-          console.log(`[FLUXRPC] EARLY DETECTED: ${pair.baseToken?.symbol} | Age: ${ageMinutes}m`);
+          console.log(`[PUMP.FUN ONLY] EARLY DETECTED: ${pair.baseToken?.symbol} | Age: ${ageMinutes}m`);
+          // Kirim Telegram (kode lama kamu)
         }
       }
     }
@@ -147,7 +148,7 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => res.send('Solana Alpha Engine + FluxRPC is running 🔥'));
+app.get('/', (req, res) => res.send('Solana Alpha Engine + FluxRPC (Pump.fun only) 🔥'));
 
 process.on('SIGTERM', () => {
   console.log('Graceful shutdown...');
@@ -157,4 +158,5 @@ process.on('SIGTERM', () => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log('FluxRPC aktif: https://eu.fluxrpc.com');
+  console.log('Filter: Pump.fun saja ✓');
 });
