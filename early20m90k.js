@@ -3,12 +3,16 @@ const express = require('express');
 const fetch = require('node-fetch');
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const AUTH_HEADER = process.env.AUTH_HEADER || 'supersecret123';
+
+// Network timeouts (milliseconds)
+const API_TIMEOUT = 5000;
+const TELEGRAM_TIMEOUT = 8000;
 
 // ============== ANALYZE ==============
 function ageH(p) {
@@ -127,44 +131,130 @@ function extractMints(tx) {
   return [...mints];
 }
 
-async function getDexScreenerPair(mint) {
-  try {
-    const res = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${mint}`);
-    if (!res.ok) return null;
-    const pairs = await res.json();
-    if (!Array.isArray(pairs) || pairs.length === 0) return null;
+// ============== CACHE WITH AUTO-CLEANUP ==============
+const seen = new Map();
+const SEEN_TTL = 1000 * 60 * 45; // 45 minutes
 
-    // Ambil pair dengan liquidity tertinggi
-    pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
-    return pairs[0];
-  } catch (e) {
-    console.error('DexScreener error:', e.message);
-    return null;
+// Cleanup cache every minute to prevent memory leaks
+const cleanupInterval = setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [mint, timestamp] of seen.entries()) {
+    if (now - timestamp > SEEN_TTL) {
+      seen.delete(mint);
+      cleaned++;
+    }
   }
+  if (cleaned > 0) {
+    console.log(`[CACHE] Cleaned ${cleaned} expired entries`);
+  }
+}, 60000);
+
+// ============== REQUEST QUEUE FOR RATE LIMITING ==============
+class RequestQueue {
+  constructor(concurrency = 3) {
+    this.concurrency = concurrency;
+    this.running = 0;
+    this.queue = [];
+  }
+
+  async add(fn) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ fn, resolve, reject });
+      this.process();
+    });
+  }
+
+  async process() {
+    if (this.running >= this.concurrency || this.queue.length === 0) return;
+
+    this.running++;
+    const { fn, resolve, reject } = this.queue.shift();
+
+    try {
+      const result = await fn();
+      resolve(result);
+    } catch (err) {
+      reject(err);
+    } finally {
+      this.running--;
+      this.process();
+    }
+  }
+}
+
+const apiQueue = new RequestQueue(3); // Max 3 concurrent API calls
+
+async function getDexScreenerPair(mint) {
+  return apiQueue.add(async () => {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), API_TIMEOUT);
+
+      const res = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${mint}`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+      if (!res.ok) {
+        console.warn(`[API] DexScreener returned ${res.status} for ${mint}`);
+        return null;
+      }
+
+      const pairs = await res.json();
+      if (!Array.isArray(pairs) || pairs.length === 0) return null;
+
+      // Only sort if multiple pairs exist
+      if (pairs.length > 1) {
+        pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+      }
+      return pairs[0];
+    } catch (e) {
+      if (e.name === 'AbortError') {
+        console.error(`[API] DexScreener timeout for ${mint}`);
+      } else {
+        console.error(`[API] DexScreener error for ${mint}:`, e.message);
+      }
+      return null;
+    }
+  });
 }
 
 async function sendTelegram(message) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.log('Telegram belum diset, message:', message);
+    console.log('[TELEGRAM] Not configured, message:', message.substring(0, 100));
     return;
   }
 
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-  await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: TELEGRAM_CHAT_ID,
-      text: message,
-      parse_mode: 'HTML',
-      disable_web_page_preview: false
-    })
-  });
-}
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT);
 
-// Cache biar tidak spam token yang sama
-const seen = new Map();
-const SEEN_TTL = 1000 * 60 * 45; // 45 menit
+    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text: message,
+        parse_mode: 'HTML',
+        disable_web_page_preview: false
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      console.error(`[TELEGRAM] Failed with status ${res.status}`);
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      console.error('[TELEGRAM] Request timeout');
+    } else {
+      console.error('[TELEGRAM] Send failed:', e.message);
+    }
+  }
+}
 
 // ============== WEBHOOK ENDPOINT ==============
 app.post('/webhook', async (req, res) => {
@@ -173,23 +263,43 @@ app.post('/webhook', async (req, res) => {
     return res.status(401).send('Unauthorized');
   }
 
-  res.status(200).send('OK');
+  // Respond immediately, process asynchronously
+  res.status(202).send('Accepted');
 
+  // Process in background without blocking response
+  setImmediate(() => {
+    processWebhook(req.body).catch(err => {
+      console.error('[WEBHOOK] Unhandled error:', err);
+    });
+  });
+});
+
+async function processWebhook(body) {
   try {
-    const transactions = Array.isArray(req.body) ? req.body : [req.body];
+    const transactions = Array.isArray(body) ? body : [body];
 
     for (const tx of transactions) {
       const mints = extractMints(tx);
       if (mints.length === 0) continue;
 
-      for (const mint of mints) {
-        // Skip kalau baru saja diproses
-        if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) continue;
+      // Parallelize API calls for all mints in this transaction
+      const pairPromises = mints.map(async (mint) => {
+        // Skip if recently processed
+        if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) {
+          return null;
+        }
         seen.set(mint, Date.now());
 
         const pair = await getDexScreenerPair(mint);
-        if (!pair) continue;
+        return { mint, pair };
+      });
 
+      const results = await Promise.all(pairPromises);
+
+      for (const result of results) {
+        if (!result || !result.pair) continue;
+
+        const { mint, pair } = result;
         const a = analyze(pair);
 
         // ========== FILTER EARLY KETAT ==========
@@ -234,12 +344,19 @@ Buy% 24h: ${Math.round(a.bp24 * 100)}%
       }
     }
   } catch (err) {
-    console.error('Webhook process error:', err);
+    console.error('[WEBHOOK] Process error:', err);
   }
-});
+}
 
 app.get('/', (req, res) => res.send('Solana Alpha Webhook is running'));
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+});
+
+// Cleanup on graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, cleaning up...');
+  clearInterval(cleanupInterval);
+  process.exit(0);
 });
