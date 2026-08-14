@@ -1,7 +1,7 @@
 {
   "name": "solana-alpha-webhook",
   "version": "1.0.0",
-  "main": "server.js",
+  "main": "early20m90k.js",
   "scripts": {
     "start": "node early20m90k.js"
   },
