@@ -156,7 +156,7 @@ const cleanupInterval = setInterval(() => {
 
 // ============== REQUEST QUEUE FOR RATE LIMITING ==============
 class RequestQueue {
-  constructor(concurrency = 3) {
+  constructor(concurrency = 1) {
     this.concurrency = concurrency;
     this.running = 0;
     this.queue = [];
@@ -187,7 +187,7 @@ class RequestQueue {
   }
 }
 
-const apiQueue = new RequestQueue(3); // Max 3 concurrent API calls
+const apiQueue = new RequestQueue(1); // Max 1 concurrent API call (conservative)
 
 async function getDexScreenerPair(mint) {
   return apiQueue.add(async () => {
@@ -306,16 +306,15 @@ async function processWebhook(body) {
         const { mint, pair } = result;
         const a = analyze(pair);
 
-        // ========== FILTER FOR PUMP.FUN (Score >= 50) ==========
-        // Only alert on good quality tokens to reduce spam
+        // ========== QUALITY FILTER ONLY (Score >= 60) ==========
         const ageMinutes = a.age !== null ? a.age * 60 : 999;
-        const isEarly = ageMinutes < 20;               // Within 20 minutes
-        const isVeryLowMcap = a.mcap > 0 && a.mcap < 50000;  // <$50k mcap
-        const hasMinimalLiq = a.liq >= 500 && a.liq <= 50000; // Minimal liq
-        const hasActivity = a.vol24 > 1000;            // Any activity
+        const isEarly = ageMinutes < 20;
+        const isVeryLowMcap = a.mcap > 0 && a.mcap < 50000;
+        const hasMinimalLiq = a.liq >= 500 && a.liq <= 50000;
+        const hasActivity = a.vol24 > 1000;
 
-        // Only alert if score >= 50 to avoid spam
-        if (isEarly && isVeryLowMcap && hasMinimalLiq && hasActivity && a.score >= 50) {
+        // Only alert if score >= 60 for quality signals
+        if (isEarly && isVeryLowMcap && hasMinimalLiq && hasActivity && a.score >= 60) {
           const name = pair.baseToken?.name || 'Unknown';
           const sym = pair.baseToken?.symbol || '???';
           const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(5)}` : '—';
@@ -323,7 +322,7 @@ async function processWebhook(body) {
           const url = pair.url || `https://dexscreener.com/solana/${mint}`;
 
           const msg = `
-🚀 <b>PUMP.FUN ALPHA | Score ${a.score}</b>
+🎯 <b>PUMP.FUN ALPHA | Score ${a.score}</b>
 
 <b>${name}</b> ($${sym})
 💰 ${price}  |  📈 ${a.chg24 >= 0 ? '+' : ''}${a.chg24.toFixed(1)}%
@@ -340,7 +339,7 @@ Buy% 24h: ${Math.round(a.bp24 * 100)}%
 `.trim();
 
           await sendTelegram(msg);
-          console.log(`[PUMP.FUN] 🚀 ${sym} | Age: ${ageStr} | MCap: $${Math.round(a.mcap)} | Score: ${a.score}`);
+          console.log(`[ALPHA] 🎯 ${sym} | Age: ${ageStr} | MCap: $${Math.round(a.mcap)} | Score: ${a.score}`);
         }
       }
     }
@@ -359,7 +358,7 @@ app.get('/health', (req, res) => {
     status: 'running',
     webhooksReceived: webhookCount,
     lastWebhookAgo: `${(timeSinceLastWebhook / 1000).toFixed(1)}s`,
-    monitoring: 'Pump.fun Only (Score >= 50)',
+    monitoring: 'Pump.fun Only (Quality Only - No Spam)',
     uptime: process.uptime()
   });
 });
@@ -367,7 +366,7 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.send(`
     <h1>🚀 Solana Alpha Webhook - Pump.fun Edition</h1>
-    <p><strong>Strategy:</strong> Budget Efficient - Pump.fun Only</p>
+    <p><strong>Strategy:</strong> Quality Over Quantity</p>
     <p>Monitoring token creation from:</p>
     <ul>
       <li>✅ <strong>Pump.fun Core:</strong> ${PUMP_FUN_CORE}</li>
@@ -375,19 +374,19 @@ app.get('/', (req, res) => {
     </ul>
     <p><strong>Alert Triggers:</strong></p>
     <ul>
-      <li>🚀 <strong>Early Detection:</strong> Age < 20 min + Score ≥ 50 (NO SPAM!)</li>
+      <li>🎯 <strong>Alpha Signals:</strong> Age < 20 min + Score ≥ 60 (Quality Only!)</li>
     </ul>
     <p><a href="/health">Health Check</a></p>
   `);
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🔥 Solana Alpha Webhook running on port ${PORT}`);
-  console.log(`\n📡 PUMP.FUN ONLY MODE (No Ultra Early Spam)`);
+  console.log(`\n🔥 Solana Alpha Webhook running on port 8080`);
+  console.log(`\n📡 PUMP.FUN ONLY MODE (Quality Over Quantity)`);
   console.log(`   Core:  ${PUMP_FUN_CORE}`);
   console.log(`   AMM:   ${PUMP_FUN_AMM}`);
-  console.log(`\n💰 Estimated webhook events: 5-10K/day`);
-  console.log(`✅ Alert Filter: Score >= 50 (Quality over Spam)\n`);
+  console.log(`\n💰 Estimated webhook events: 1-5K/day (very selective)`);
+  console.log(`✅ Alert Filter: Score >= 60 (Premium Quality Only)\n`);
 });
 
 // Cleanup on graceful shutdown
