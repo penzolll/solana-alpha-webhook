@@ -306,46 +306,16 @@ async function processWebhook(body) {
         const { mint, pair } = result;
         const a = analyze(pair);
 
-        // ========== FILTER FOR PUMP.FUN EARLY DETECTION ==========
-        // Pump.fun tokens are ULTRA early, so we're more aggressive
+        // ========== FILTER FOR PUMP.FUN (Score >= 50) ==========
+        // Only alert on good quality tokens to reduce spam
         const ageMinutes = a.age !== null ? a.age * 60 : 999;
-        const isUltraEarly = ageMinutes < 5;           // 5 minutes = NEW token
-        const isEarly = ageMinutes < 20;               // 20 minutes = still very early
-        const isVeryLowMcap = a.mcap > 0 && a.mcap < 50000;  // <$50k mcap (bonding curve)
-        const hasMinimalLiq = a.liq >= 500 && a.liq <= 50000; // Minimal liq on bonding curve
+        const isEarly = ageMinutes < 20;               // Within 20 minutes
+        const isVeryLowMcap = a.mcap > 0 && a.mcap < 50000;  // <$50k mcap
+        const hasMinimalLiq = a.liq >= 500 && a.liq <= 50000; // Minimal liq
         const hasActivity = a.vol24 > 1000;            // Any activity
 
-        // Ultra early detection (< 5 min, any score)
-        if (isUltraEarly && isVeryLowMcap && hasActivity) {
-          const name = pair.baseToken?.name || 'Unknown';
-          const sym = pair.baseToken?.symbol || '???';
-          const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(6)}` : '—';
-          const ageStr = a.age == null ? '—' : (a.age < 1 ? Math.round(a.age * 60) + 's' : a.age.toFixed(1) + 'h');
-          const url = pair.url || `https://dexscreener.com/solana/${mint}`;
-
-          const msg = `
-🚨 <b>ULTRA EARLY PUMP.FUN!</b>
-⏱ <b>AGE: ${ageStr}</b> (JUST CREATED!)
-
-<b>${name}</b> ($${sym})
-💰 ${price}  |  📈 ${a.chg24 >= 0 ? '+' : ''}${a.chg24.toFixed(1)}%
-💧 Liq: $${Math.round(a.liq).toLocaleString()}  |  Vol: $${Math.round(a.vol24).toLocaleString()}
-📊 MCap: $${Math.round(a.mcap).toLocaleString()}
-Buy% 24h: ${Math.round(a.bp24 * 100)}%
-
-🔗 <a href="${url}">DexScreener</a>
-🔗 <a href="https://pump.fun/?token=${mint}">Pump.fun</a>
-🔗 <a href="https://birdeye.so/token/${mint}?chain=solana">Birdeye</a>
-🔗 <a href="https://rugcheck.xyz/tokens/${mint}">RugCheck</a>
-
-<code>${mint}</code>
-`.trim();
-
-          await sendTelegram(msg);
-          console.log(`[PUMP.FUN ULTRA] 🚨 ${sym} | Age: ${ageStr} | MCap: $${Math.round(a.mcap)} | CREATED!`);
-        }
-        // Early detection (< 20 min, good score)
-        else if (isEarly && isVeryLowMcap && hasMinimalLiq && a.score >= 50) {
+        // Only alert if score >= 50 to avoid spam
+        if (isEarly && isVeryLowMcap && hasMinimalLiq && hasActivity && a.score >= 50) {
           const name = pair.baseToken?.name || 'Unknown';
           const sym = pair.baseToken?.symbol || '???';
           const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(5)}` : '—';
@@ -353,7 +323,7 @@ Buy% 24h: ${Math.round(a.bp24 * 100)}%
           const url = pair.url || `https://dexscreener.com/solana/${mint}`;
 
           const msg = `
-🚀 <b>EARLY PUMP.FUN | Score ${a.score}</b>
+🚀 <b>PUMP.FUN ALPHA | Score ${a.score}</b>
 
 <b>${name}</b> ($${sym})
 💰 ${price}  |  📈 ${a.chg24 >= 0 ? '+' : ''}${a.chg24.toFixed(1)}%
@@ -370,7 +340,7 @@ Buy% 24h: ${Math.round(a.bp24 * 100)}%
 `.trim();
 
           await sendTelegram(msg);
-          console.log(`[PUMP.FUN EARLY] 🚀 ${sym} | Age: ${ageStr} | MCap: $${Math.round(a.mcap)} | Score: ${a.score}`);
+          console.log(`[PUMP.FUN] 🚀 ${sym} | Age: ${ageStr} | MCap: $${Math.round(a.mcap)} | Score: ${a.score}`);
         }
       }
     }
@@ -389,7 +359,7 @@ app.get('/health', (req, res) => {
     status: 'running',
     webhooksReceived: webhookCount,
     lastWebhookAgo: `${(timeSinceLastWebhook / 1000).toFixed(1)}s`,
-    monitoring: 'Pump.fun Only (Budget Efficient)',
+    monitoring: 'Pump.fun Only (Score >= 50)',
     uptime: process.uptime()
   });
 });
@@ -405,8 +375,7 @@ app.get('/', (req, res) => {
     </ul>
     <p><strong>Alert Triggers:</strong></p>
     <ul>
-      <li>🚨 <strong>Ultra Early:</strong> Age &lt; 5 minutes (JUST CREATED!)</li>
-      <li>🚀 <strong>Early:</strong> Age &lt; 20 minutes + Score ≥ 50</li>
+      <li>🚀 <strong>Early Detection:</strong> Age < 20 min + Score ≥ 50 (NO SPAM!)</li>
     </ul>
     <p><a href="/health">Health Check</a></p>
   `);
@@ -414,11 +383,11 @@ app.get('/', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n🔥 Solana Alpha Webhook running on port ${PORT}`);
-  console.log(`\n📡 PUMP.FUN ONLY MODE (Budget Efficient)`);
+  console.log(`\n📡 PUMP.FUN ONLY MODE (No Ultra Early Spam)`);
   console.log(`   Core:  ${PUMP_FUN_CORE}`);
   console.log(`   AMM:   ${PUMP_FUN_AMM}`);
   console.log(`\n💰 Estimated webhook events: 5-10K/day`);
-  console.log(`⏰ Token creation detection: < 5 minutes old!\n`);
+  console.log(`✅ Alert Filter: Score >= 50 (Quality over Spam)\n`);
 });
 
 // Cleanup on graceful shutdown
