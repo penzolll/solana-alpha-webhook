@@ -39,7 +39,7 @@ function connect() {
   ws.on('open', () => {
     console.log('✅ Venum WebSocket connected');
 
-    // === PROGRAM SUBSCRIBE (paling tepat untuk Pump.fun) ===
+    // PROGRAM SUBSCRIBE (paling tepat untuk Pump.fun)
     const sub = {
       jsonrpc: '2.0',
       id: 1,
@@ -107,7 +107,7 @@ function connect() {
         if (a.bp5m < 0.48) label = '⚠️ EARLY + SELL PRESSURE';
         else if (a.score >= 70) label = '🚀 ALPHA';
 
-        // ... rest Telegram & console log sama seperti kode sebelumnya
+        // Rest Telegram & console log sama seperti kode sebelumnya
       }
     } catch (err) {
       console.error('Message process error:', err.message);
