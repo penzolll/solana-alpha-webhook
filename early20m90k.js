@@ -124,7 +124,7 @@ function analyze(p) {
   return { score, pos, neg, verdict, bp24, bp1h, age, liq, vol24, mcap, chg24 };
 }
 
-// ============== EXTRACT MINTS (RAW + STRICT) ==============
+// ============== EXTRACT MINTS (SEMI-STRICT) ==============
 function extractMintsFromRaw(tx) {
   const mints = new Set();
   const WSOL = 'So11111111111111111111111111111111111111112';
@@ -133,11 +133,14 @@ function extractMintsFromRaw(tx) {
   const logText = logs.join(' ').toLowerCase();
 
   const isCreate =
-    logText.includes('instruction: initializemint2') ||
     logText.includes('instruction: create') ||
-    logText.includes('program log: instruction: create');
+    logText.includes('program log: instruction: create') ||
+    logText.includes('initializemint2') ||
+    logText.includes('initializemint');
 
-  if (!isCreate) return [];
+  const isBuy =
+    logText.includes('instruction: buy') ||
+    logText.includes('program log: instruction: buy');
 
   const balances = [
     ...(tx?.meta?.preTokenBalances || []),
@@ -150,13 +153,21 @@ function extractMintsFromRaw(tx) {
     }
   }
 
+  if (!isCreate && !isBuy) return [];
+
+  if (mints.size > 0) {
+    console.log(`[Extract] Create=${isCreate} Buy=${isBuy} → ${[...mints].join(', ')}`);
+  }
+
   return [...mints];
 }
 
 // ============== HELPER ==============
 async function getDexScreenerPair(mint) {
   try {
-    const res = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${mint}`);
+    const res = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${mint}`, {
+      timeout: 4000
+    });
     if (!res.ok) return null;
     const pairs = await res.json();
     if (!Array.isArray(pairs) || pairs.length === 0) return null;
@@ -165,6 +176,25 @@ async function getDexScreenerPair(mint) {
     return pairs[0];
   } catch (e) {
     console.error('DexScreener error:', e.message);
+    return null;
+  }
+}
+
+// RugCheck dengan timeout 700ms
+async function getRugCheck(mint) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 700);
+
+    const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary`, {
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    // Timeout atau error → return null (jangan gagalkan notifikasi)
     return null;
   }
 }
@@ -203,8 +233,6 @@ app.post('/webhook', async (req, res) => {
 
   try {
     const transactions = Array.isArray(req.body) ? req.body : [req.body];
-
-    // Debug singkat
     console.log(`[Webhook] Received ${transactions.length} tx`);
 
     for (const tx of transactions) {
@@ -215,25 +243,56 @@ app.post('/webhook', async (req, res) => {
         if (seen.has(mint) && Date.now() - seen.get(mint) < SEEN_TTL) continue;
         seen.set(mint, Date.now());
 
+        // 1. DexScreener
         const pair = await getDexScreenerPair(mint);
         if (!pair) continue;
 
         const a = analyze(pair);
 
+        // Filter early ketat
         const ageMinutes = a.age !== null ? a.age * 60 : 999;
         const isEarly = ageMinutes < 20;
         const isLowMcap = a.mcap > 0 && a.mcap < 90000;
         const isDecentLiq = a.liq >= 3000 && a.liq <= 60000;
         const hasActivity = a.vol24 > 5000;
 
-        if (isEarly && isLowMcap && isDecentLiq && hasActivity && a.score >= 58) {
-          const name = pair.baseToken?.name || 'Unknown';
-          const sym = pair.baseToken?.symbol || '???';
-          const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
-          const ageStr = a.age == null ? '—' : (a.age < 1 ? Math.round(a.age * 60) + 'm' : a.age.toFixed(1) + 'h');
-          const url = pair.url || `https://dexscreener.com/solana/${mint}`;
+        if (!(isEarly && isLowMcap && isDecentLiq && hasActivity && a.score >= 58)) {
+          continue;
+        }
 
-          const msg = `
+        // 2. RugCheck (dengan timeout)
+        const rug = await getRugCheck(mint);
+
+        // Filter keras dari RugCheck (kalau datanya ada)
+        if (rug) {
+          const risks = rug.risks || [];
+          const hasDanger = risks.some(r => r.level === 'danger');
+          const scoreNorm = rug.score_normalised ?? 100;
+
+          // Skip jika terlalu berbahaya
+          if (hasDanger || scoreNorm > 60) {
+            console.log(`[SKIP] ${mint} - RugCheck danger/high risk`);
+            continue;
+          }
+        }
+
+        // ========== KIRIM TELEGRAM ==========
+        const name = pair.baseToken?.name || 'Unknown';
+        const sym = pair.baseToken?.symbol || '???';
+        const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
+        const ageStr = a.age == null ? '—' : (a.age < 1 ? Math.round(a.age * 60) + 'm' : a.age.toFixed(1) + 'h');
+        const url = pair.url || `https://dexscreener.com/solana/${mint}`;
+
+        // Info RugCheck
+        let rugInfo = '🛡️ RugCheck: Data belum tersedia';
+        if (rug) {
+          const lpLocked = rug.lpLockedPct != null ? `${rug.lpLockedPct}%` : '—';
+          const score = rug.score_normalised != null ? rug.score_normalised : '—';
+          const riskLevel = (rug.risks || []).some(r => r.level === 'danger') ? 'DANGER' : 'OK';
+          rugInfo = `🛡️ RugCheck: Score ${score} | LP Locked: ${lpLocked} | Status: ${riskLevel}`;
+        }
+
+        const msg = `
 🚀 <b>EARLY · Score ${a.score}</b>
 
 <b>${name}</b> ($${sym})
@@ -242,6 +301,8 @@ app.post('/webhook', async (req, res) => {
 ⏱ Age: ${ageStr}  |  MCap: $${Math.round(a.mcap).toLocaleString()}
 Buy% 24h: ${Math.round(a.bp24 * 100)}%
 
+${rugInfo}
+
 🔗 <a href="${url}">DexScreener</a>
 🔗 <a href="https://birdeye.so/token/${mint}?chain=solana">Birdeye</a>
 🔗 <a href="https://rugcheck.xyz/tokens/${mint}">RugCheck</a>
@@ -249,9 +310,8 @@ Buy% 24h: ${Math.round(a.bp24 * 100)}%
 <code>${mint}</code>
 `.trim();
 
-          await sendTelegram(msg);
-          console.log(`[EARLY] ${sym} | Age: ${ageStr} | MCap: ${Math.round(a.mcap)} | Score: ${a.score}`);
-        }
+        await sendTelegram(msg);
+        console.log(`[EARLY] ${sym} | Age: ${ageStr} | MCap: ${Math.round(a.mcap)} | Score: ${a.score}`);
       }
     }
   } catch (err) {
@@ -259,7 +319,7 @@ Buy% 24h: ${Math.round(a.bp24 * 100)}%
   }
 });
 
-app.get('/', (req, res) => res.send('Solana Alpha Webhook (Raw + Strict) is running'));
+app.get('/', (req, res) => res.send('Solana Alpha Webhook (Raw + Semi-Strict + RugCheck) is running'));
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
