@@ -6,7 +6,7 @@ function extractMintsFromTx(result) {
     return { mints: [], isCreate: false, isBuy: false, isSell: false };
   }
 
-  const meta = result.transaction.meta || result.meta || {};
+  const meta = result.transaction.meta || {};
   const logs = meta.logMessages || [];
   const logText = logs.join(' ').toLowerCase();
 
