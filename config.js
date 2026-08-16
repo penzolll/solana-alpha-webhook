@@ -1,5 +1,4 @@
 module.exports = {
-  // Venum
   VENUM_WSS_URL: `wss://rpc.venum.dev/?apiKey=${process.env.VENUM_API_KEY || 'gmgn_solbscbaseethmonadtron'}`,
 
   PUMP_FUN_PROGRAM: '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
