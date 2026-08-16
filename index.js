@@ -39,10 +39,9 @@ function connect() {
   console.log('Connecting to Venum WebSocket...');
   ws = new WebSocket(config.VENUM_WSS_URL);
 
-  ws.on('open', () => {
+   ws.on('open', () => {
     console.log('✅ Venum WebSocket connected');
 
-    // === LOGS SUBSCRIBE ===
     const sub = {
       jsonrpc: '2.0',
       id: 1,
@@ -55,6 +54,7 @@ function connect() {
 
     ws.send(JSON.stringify(sub));
     console.log('📡 Subscribed to Pump.fun program via logsSubscribe');
+  });
 
     if (pingInterval) clearInterval(pingInterval);
     pingInterval = setInterval(() => {
