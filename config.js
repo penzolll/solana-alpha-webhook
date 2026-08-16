@@ -1,12 +1,12 @@
 module.exports = {
-  VENUM_API_URL: `https://api.venum.dev/v1/stream/pools`,
+  // Venum API + SSE (Starter tier = 3 koneksi)
+  VENUM_BASE_URL: `https://api.venum.dev/v1/stream/pools`,
+  VENUM_API_KEY: process.env.VENUM_API_KEY,
 
-  // Optional: fallback ke stream-accounts (lebih tepat untuk program)
+  // Fallback ke stream-accounts (lebih tepat untuk program Pump.fun)
   VENUM_FALLBACK_URL: `https://api.venum.dev/v1/stream/accounts`,
 
   PUMP_FUN_PROGRAM: '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
-
-  VENUM_API_KEY: process.env.VENUM_API_KEY,
 
   // Filter sama seperti sebelumnya
   MAX_AGE_MINUTES: 25,
