@@ -10,8 +10,8 @@ const { getRugCheck } = require('./services/rugcheck');
 const { sendTelegram } = require('./services/telegram');
 const { isSeen } = require('./utils/cache');
 
-if (!config.HELIUS_API_KEY) {
-  console.error('❌ HELIUS_API_KEY belum diset di .env');
+if (!config.QUICKNODE_WSS_URL) {
+  console.error('❌ QUICKNODE_WSS_URL belum diset di .env');
   process.exit(1);
 }
 
@@ -20,14 +20,12 @@ let pingInterval = null;
 let reconnectTimeout = null;
 
 async function getTokenData(mint) {
-  // 1. Coba DexScreener dulu
   let pair = await getDexScreenerPair(mint);
   if (pair) {
     pair._source = 'dexscreener';
     return pair;
   }
 
-  // 2. Fallback ke GMGN
   pair = await getGmgnToken(mint);
   if (pair) {
     console.log(`[Fallback] GMGN data untuk ${mint}`);
@@ -38,18 +36,20 @@ async function getTokenData(mint) {
 }
 
 function connect() {
-  console.log('Connecting to Helius WebSocket...');
-  ws = new WebSocket(config.WS_URL);
+  console.log('Connecting to QuickNode WebSocket...');
+  ws = new WebSocket(config.QUICKNODE_WSS_URL);
 
   ws.on('open', () => {
-    console.log('✅ WebSocket connected');
+    console.log('✅ QuickNode WebSocket connected');
 
+    // transactionSubscribe ke Pump.fun
     const subscribeMsg = {
       jsonrpc: '2.0',
       id: 1,
       method: 'transactionSubscribe',
       params: [
         {
+          vote: false,
           failed: false,
           accountInclude: [config.PUMP_FUN_PROGRAM]
         },
@@ -63,7 +63,7 @@ function connect() {
     };
 
     ws.send(JSON.stringify(subscribeMsg));
-    console.log('📡 Subscribed to Pump.fun program:', config.PUMP_FUN_PROGRAM);
+    console.log('📡 Subscribed to Pump.fun:', config.PUMP_FUN_PROGRAM);
 
     if (pingInterval) clearInterval(pingInterval);
     pingInterval = setInterval(() => {
@@ -77,20 +77,22 @@ function connect() {
     try {
       const msg = JSON.parse(raw.toString());
 
-      if (msg.result && typeof msg.result === 'number') {
+      // Subscription confirmation
+      if (msg.result !== undefined && !msg.params) {
         console.log('Subscription ID:', msg.result);
+        return;
+      }
+
+      // Error dari server
+      if (msg.error) {
+        console.error('QuickNode error:', JSON.stringify(msg.error));
         return;
       }
 
       const result = msg.params?.result;
       if (!result) return;
 
-      const extracted = extractMintsFromTx(result);
-      const mints = extracted.mints || extracted;
-      const isCreate = extracted.isCreate;
-      const isBuy = extracted.isBuy;
-      const isSell = extracted.isSell;
-
+      const { mints, isCreate, isBuy, isSell } = extractMintsFromTx(result);
       if (!mints || mints.length === 0) return;
 
       for (const mint of mints) {
@@ -187,4 +189,4 @@ ${rugInfo}
 }
 
 connect();
-console.log('Solana Alpha WebSocket (DexScreener + GMGN fallback) started');
+console.log('Solana Alpha WebSocket (QuickNode) started');
