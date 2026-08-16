@@ -92,7 +92,7 @@ async function connectStream(url) {
               if (a.bp5m < config.MIN_BUY_PRESSURE_5M && ageMinutes < config.EARLY_AGE_FOR_SELL_CHECK) continue;
               if (a.score < config.MIN_SCORE) continue;
 
-              // Filter & notifikasi Telegram (sama seperti sebelumnya)
+              // ... (sisa filter & notifikasi Telegram sama seperti sebelumnya)
               const name = pair.baseToken?.name || 'Unknown';
               const sym = pair.baseToken?.symbol || '???';
               const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
@@ -103,7 +103,7 @@ async function connectStream(url) {
               if (a.bp5m < 0.48) label = '⚠️ EARLY + SELL PRESSURE';
               else if (a.score >= 70) label = '🚀 ALPHA';
 
-              // ... rest Telegram & console log sama seperti kode sebelumnya
+              // Rest Telegram & console log sama seperti kode sebelumnya
             }
           } catch (e) {
             console.error('Venum SSE parse error:', e.message);
@@ -117,6 +117,6 @@ async function connectStream(url) {
   }
 }
 
-// Jalankan
+// Jalankan (awalnya pakai pools, nanti fallback)
 connectStream(config.VENUM_BASE_URL);
 console.log('Solana Alpha Venum SSE (stream-pools) started');
