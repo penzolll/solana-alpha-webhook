@@ -1,9 +1,9 @@
 module.exports = {
-  VENUM_BASE_URL: `https://api.venum.dev/v1/stream/pools`,
-  VENUM_API_KEY: process.env.VENUM_API_KEY,
+  // Venum Cached API (gratis, no auth)
+  VENUM_BASE_URL: 'https://api.venum.dev/v1',
 
-  // Fallback ke stream-accounts (lebih tepat untuk Pump.fun)
-  VENUM_FALLBACK_URL: `https://api.venum.dev/v1/stream/accounts`,
+  // Tidak perlu API Key untuk free
+  // VENUM_API_KEY: process.env.VENUM_API_KEY,
 
   PUMP_FUN_PROGRAM: '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
 
