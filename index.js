@@ -35,17 +35,15 @@ async function connectStream(url) {
   console.log(`Connecting to Venum SSE: ${url}`);
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
 
   try {
     const res = await fetch(url, {
       headers: { 'x-api-key': config.VENUM_API_KEY },
       signal: controller.signal
     });
-    clearTimeout(timeout);
 
     if (!res.ok) {
-      console.error(`Venum SSE error: ${res.status}`);
+      console.error(`Venum SSE error: ${res.status} ${res.statusText}`);
       return;
     }
 
@@ -66,7 +64,6 @@ async function connectStream(url) {
           try {
             const data = JSON.parse(line.slice(6));
 
-            // Detect new pool / account update
             let mints = [];
             if (data.tokenA || data.tokenB) {
               mints = [data.tokenA, data.tokenB].filter(Boolean);
@@ -95,9 +92,7 @@ async function connectStream(url) {
               if (a.bp5m < config.MIN_BUY_PRESSURE_5M && ageMinutes < config.EARLY_AGE_FOR_SELL_CHECK) continue;
               if (a.score < config.MIN_SCORE) continue;
 
-              // ... (sisa filter & notifikasi Telegram sama seperti kode sebelumnya)
-              // Saya sudah copy semua logika lama di sini
-              // Contoh notifikasi tetap sama
+              // Filter & notifikasi Telegram (sama seperti sebelumnya)
               const name = pair.baseToken?.name || 'Unknown';
               const sym = pair.baseToken?.symbol || '???';
               const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
@@ -108,7 +103,7 @@ async function connectStream(url) {
               if (a.bp5m < 0.48) label = '⚠️ EARLY + SELL PRESSURE';
               else if (a.score >= 70) label = '🚀 ALPHA';
 
-              // ... rest Telegram & console log sama seperti sebelumnya
+              // ... rest Telegram & console log sama seperti kode sebelumnya
             }
           } catch (e) {
             console.error('Venum SSE parse error:', e.message);
@@ -117,11 +112,11 @@ async function connectStream(url) {
       }
     }
   } catch (err) {
-    console.error(`Venum SSE closed or error: ${err.message}`);
-    setTimeout(() => connectStream(url), 5000); // reconnect
+    console.error(`Venum SSE closed: ${err.message}`);
+    setTimeout(() => connectStream(url), 5000); // reconnect otomatis
   }
 }
 
 // Jalankan
-connectStream(config.VENUM_API_URL);
+connectStream(config.VENUM_BASE_URL);
 console.log('Solana Alpha Venum SSE (stream-pools) started');
