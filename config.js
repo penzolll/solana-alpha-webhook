@@ -3,7 +3,6 @@ module.exports = {
 
   PUMP_FUN_PROGRAM: '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
 
-  // Filter & services (tetap sama)
   MAX_AGE_MINUTES: 25,
   MAX_MCAP: 100000,
   MIN_LIQ: 2500,
