@@ -11,7 +11,7 @@ const { sendTelegram } = require('./services/telegram');
 const { isSeen } = require('./utils/cache');
 
 if (!config.VENUM_API_KEY) {
-  console.error('❌ VENUM_API_KEY belum diset di .env');
+  console.error('❌ VENUM_API_KEY belum diset');
   process.exit(1);
 }
 
@@ -42,7 +42,6 @@ function connect() {
   ws.on('open', () => {
     console.log('✅ Venum WebSocket connected');
 
-    // Logs Subscribe
     const sub = {
       jsonrpc: '2.0',
       id: 1,
