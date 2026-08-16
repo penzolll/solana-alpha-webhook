@@ -10,11 +10,6 @@ const { getRugCheck } = require('./services/rugcheck');
 const { sendTelegram } = require('./services/telegram');
 const { isSeen } = require('./utils/cache');
 
-if (!config.VENUM_API_KEY) {
-  console.error('❌ VENUM_API_KEY belum diset di Railway');
-  process.exit(1);
-}
-
 async function getTokenData(mint) {
   let pair = await getDexScreenerPair(mint);
   if (pair) {
@@ -31,92 +26,67 @@ async function getTokenData(mint) {
   return null;
 }
 
-async function connectStream(url) {
-  console.log(`Connecting to Venum SSE: ${url}`);
-
-  const controller = new AbortController();
+async function connectVenum() {
+  console.log('Connecting to Venum Cached API...');
 
   try {
-    const res = await fetch(url, {
-      headers: { 'x-api-key': config.VENUM_API_KEY },
-      signal: controller.signal
-    });
-
+    const res = await fetch(`${config.VENUM_BASE_URL}/pools/new`);
     if (!res.ok) {
-      console.error(`Venum SSE error: ${res.status} ${res.statusText}`);
+      console.error(`Venum error: ${res.status}`);
       return;
     }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
+    const data = await res.json();
+    if (!data || !Array.isArray(data)) return;
 
-    console.log(`✅ Venum SSE connected (${url})`);
+    console.log(`✅ Venum cached loaded (${data.length} pools)`);
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
+    for (const pool of data) {
+      // Detect new pool (biasanya ada tokenA/tokenB)
+      let mints = [];
+      if (pool.tokenA) mints.push(pool.tokenA);
+      if (pool.tokenB) mints.push(pool.tokenB);
 
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
+      for (const mint of mints) {
+        if (isSeen(mint)) continue;
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
+        const pair = await getTokenData(mint);
+        if (!pair) continue;
 
-            let mints = [];
-            if (data.tokenA || data.tokenB) {
-              mints = [data.tokenA, data.tokenB].filter(Boolean);
-            } else if (data.mint) {
-              mints = [data.mint];
-            }
+        const a = analyze(pair);
 
-            if (mints.length === 0) continue;
+        const ageMinutes = a.age !== null ? a.age * 60 : 999;
+        const isEarly = ageMinutes < config.MAX_AGE_MINUTES;
+        const isLowMcap = a.mcap > 0 && a.mcap < config.MAX_MCAP;
+        const isDecentLiq = a.liq >= config.MIN_LIQ && a.liq <= config.MAX_LIQ;
+        const hasActivity = a.vol24 > config.MIN_VOL24;
 
-            for (const mint of mints) {
-              if (isSeen(mint)) continue;
+        if (!(isEarly && isLowMcap && isDecentLiq && hasActivity)) continue;
 
-              const pair = await getTokenData(mint);
-              if (!pair) continue;
+        if (a.bp5m < config.MIN_BUY_PRESSURE_5M && ageMinutes < config.EARLY_AGE_FOR_SELL_CHECK) continue;
+        if (a.score < config.MIN_SCORE) continue;
 
-              const a = analyze(pair);
+        // ... (sisa filter & notifikasi Telegram sama seperti sebelumnya)
+        const name = pair.baseToken?.name || 'Unknown';
+        const sym = pair.baseToken?.symbol || '???';
+        const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
+        const ageStr = a.age == null ? '—' : (a.age < 1 ? Math.round(a.age * 60) + 'm' : a.age.toFixed(1) + 'h');
+        const urlChart = pair.url || `https://dexscreener.com/solana/${mint}`;
 
-              const ageMinutes = a.age !== null ? a.age * 60 : 999;
-              const isEarly = ageMinutes < config.MAX_AGE_MINUTES;
-              const isLowMcap = a.mcap > 0 && a.mcap < config.MAX_MCAP;
-              const isDecentLiq = a.liq >= config.MIN_LIQ && a.liq <= config.MAX_LIQ;
-              const hasActivity = a.vol24 > config.MIN_VOL24;
+        let label = 'EARLY';
+        if (a.bp5m < 0.48) label = '⚠️ EARLY + SELL PRESSURE';
+        else if (a.score >= 70) label = '🚀 ALPHA';
 
-              if (!(isEarly && isLowMcap && isDecentLiq && hasActivity)) continue;
-
-              if (a.bp5m < config.MIN_BUY_PRESSURE_5M && ageMinutes < config.EARLY_AGE_FOR_SELL_CHECK) continue;
-              if (a.score < config.MIN_SCORE) continue;
-
-              // ... (sisa filter & notifikasi Telegram sama seperti sebelumnya)
-              const name = pair.baseToken?.name || 'Unknown';
-              const sym = pair.baseToken?.symbol || '???';
-              const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
-              const ageStr = a.age == null ? '—' : (a.age < 1 ? Math.round(a.age * 60) + 'm' : a.age.toFixed(1) + 'h');
-              const urlChart = pair.url || `https://dexscreener.com/solana/${mint}`;
-
-              let label = 'EARLY';
-              if (a.bp5m < 0.48) label = '⚠️ EARLY + SELL PRESSURE';
-              else if (a.score >= 70) label = '🚀 ALPHA';
-
-              // Rest Telegram & console log sama seperti kode sebelumnya
-            }
-          } catch (e) {
-            console.error('Venum SSE parse error:', e.message);
-          }
-        }
+        // Rest Telegram & console log sama seperti kode sebelumnya
       }
     }
   } catch (err) {
-    console.error(`Venum SSE closed: ${err.message}`);
-    setTimeout(() => connectStream(url), 5000); // reconnect otomatis
+    console.error('Venum cached error:', err.message);
   }
 }
 
-// Jalankan (awalnya pakai pools, nanti fallback)
-connectStream(config.VENUM_BASE_URL);
-console.log('Solana Alpha Venum SSE (stream-pools) started');
+// Jalankan sekali (bisa di-loop setiap 30 detik)
+connectVenum();
+setInterval(connectVenum, 30000); // update setiap 30 detik
+
+console.log('Solana Alpha Venum Cached started (gratis)');
