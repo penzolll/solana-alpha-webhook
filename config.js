@@ -1,13 +1,8 @@
 module.exports = {
-  // Venum Cached API (gratis, no auth)
-  VENUM_BASE_URL: 'https://api.venum.dev/v1',
-
-  // Tidak perlu API Key untuk free
-  // VENUM_API_KEY: process.env.VENUM_API_KEY,
+  VENUM_WSS_URL: `wss://asia.rpc.venum.dev/?apiKey=${process.env.VENUM_API_KEY}`,
 
   PUMP_FUN_PROGRAM: '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
 
-  // Filter sama seperti sebelumnya
   MAX_AGE_MINUTES: 25,
   MAX_MCAP: 100000,
   MIN_LIQ: 2500,
@@ -22,5 +17,5 @@ module.exports = {
   RUGCHECK_MAX_SCORE: 65,
   WSOL: 'So11111111111111111111111111111111111111112',
 
-  PING_INTERVAL_MS: 30000
+  PING_INTERVAL_MS: 15000
 };
