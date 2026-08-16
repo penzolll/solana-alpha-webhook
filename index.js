@@ -5,6 +5,7 @@ const config = require('./config');
 const { extractMintsFromTx } = require('./extract');
 const { analyze } = require('./analyze');
 const { getDexScreenerPair } = require('./services/dexscreener');
+const { getGmgnToken } = require('./services/gmgn');
 const { getRugCheck } = require('./services/rugcheck');
 const { sendTelegram } = require('./services/telegram');
 const { isSeen } = require('./utils/cache');
@@ -18,6 +19,24 @@ let ws = null;
 let pingInterval = null;
 let reconnectTimeout = null;
 
+async function getTokenData(mint) {
+  // 1. Coba DexScreener dulu
+  let pair = await getDexScreenerPair(mint);
+  if (pair) {
+    pair._source = 'dexscreener';
+    return pair;
+  }
+
+  // 2. Fallback ke GMGN
+  pair = await getGmgnToken(mint);
+  if (pair) {
+    console.log(`[Fallback] GMGN data untuk ${mint}`);
+    return pair;
+  }
+
+  return null;
+}
+
 function connect() {
   console.log('Connecting to Helius WebSocket...');
   ws = new WebSocket(config.WS_URL);
@@ -25,7 +44,6 @@ function connect() {
   ws.on('open', () => {
     console.log('✅ WebSocket connected');
 
-    // Subscribe ke Pump.fun bonding curve
     const subscribeMsg = {
       jsonrpc: '2.0',
       id: 1,
@@ -47,7 +65,6 @@ function connect() {
     ws.send(JSON.stringify(subscribeMsg));
     console.log('📡 Subscribed to Pump.fun program:', config.PUMP_FUN_PROGRAM);
 
-    // Keep-alive ping
     if (pingInterval) clearInterval(pingInterval);
     pingInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
@@ -60,29 +77,30 @@ function connect() {
     try {
       const msg = JSON.parse(raw.toString());
 
-      // Subscription confirmation
       if (msg.result && typeof msg.result === 'number') {
         console.log('Subscription ID:', msg.result);
         return;
       }
 
-      // Actual transaction data
       const result = msg.params?.result;
       if (!result) return;
 
-      const { mints, isCreate, isBuy, isSell } = extractMintsFromTx(result);
-      if (mints.length === 0) return;
+      const extracted = extractMintsFromTx(result);
+      const mints = extracted.mints || extracted;
+      const isCreate = extracted.isCreate;
+      const isBuy = extracted.isBuy;
+      const isSell = extracted.isSell;
+
+      if (!mints || mints.length === 0) return;
 
       for (const mint of mints) {
         if (isSeen(mint)) continue;
 
-        // DexScreener
-        const pair = await getDexScreenerPair(mint);
+        const pair = await getTokenData(mint);
         if (!pair) continue;
 
         const a = analyze(pair);
 
-        // Filter dasar
         const ageMinutes = a.age !== null ? a.age * 60 : 999;
         const isEarly = ageMinutes < config.MAX_AGE_MINUTES;
         const isLowMcap = a.mcap > 0 && a.mcap < config.MAX_MCAP;
@@ -91,7 +109,6 @@ function connect() {
 
         if (!(isEarly && isLowMcap && isDecentLiq && hasActivity)) continue;
 
-        // Filter Sell Pressure di early
         if (a.bp5m < config.MIN_BUY_PRESSURE_5M && ageMinutes < config.EARLY_AGE_FOR_SELL_CHECK) {
           console.log(`[SKIP] ${mint} - Sell pressure tinggi`);
           continue;
@@ -99,7 +116,6 @@ function connect() {
 
         if (a.score < config.MIN_SCORE) continue;
 
-        // RugCheck
         const rug = await getRugCheck(mint);
         if (rug) {
           const hasDanger = (rug.risks || []).some(r => r.level === 'danger');
@@ -110,12 +126,12 @@ function connect() {
           }
         }
 
-        // ========== KIRIM NOTIFIKASI ==========
         const name = pair.baseToken?.name || 'Unknown';
         const sym = pair.baseToken?.symbol || '???';
         const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
         const ageStr = a.age == null ? '—' : (a.age < 1 ? Math.round(a.age * 60) + 'm' : a.age.toFixed(1) + 'h');
         const url = pair.url || `https://dexscreener.com/solana/${mint}`;
+        const source = pair._source === 'gmgn' ? 'GMGN' : 'DexScreener';
 
         let label = 'EARLY';
         if (a.bp5m < 0.48) label = '⚠️ EARLY + SELL PRESSURE';
@@ -132,6 +148,7 @@ function connect() {
 
         const msgText = `
 ${label} · Score ${a.score} ${txType ? `| ${txType}` : ''}
+📡 Source: ${source}
 
 <b>${name}</b> ($${sym})
 💰 ${price}  |  📈 ${a.chg24 >= 0 ? '+' : ''}${a.chg24.toFixed(1)}%
@@ -141,15 +158,16 @@ Buy% 5m: ${Math.round(a.bp5m * 100)}%  |  Buy% 24h: ${Math.round(a.bp24 * 100)}%
 
 ${rugInfo}
 
-🔗 <a href="${url}">DexScreener</a>
+🔗 <a href="${url}">Chart</a>
 🔗 <a href="https://birdeye.so/token/${mint}?chain=solana">Birdeye</a>
 🔗 <a href="https://rugcheck.xyz/tokens/${mint}">RugCheck</a>
+🔗 <a href="https://gmgn.ai/sol/token/${mint}">GMGN</a>
 
 <code>${mint}</code>
 `.trim();
 
         await sendTelegram(msgText);
-        console.log(`[${label}] ${sym} | Age: ${ageStr} | Score: ${a.score} | Buy5m: ${Math.round(a.bp5m * 100)}%`);
+        console.log(`[${label}] ${sym} | Age: ${ageStr} | Score: ${a.score} | Source: ${source}`);
       }
     } catch (err) {
       console.error('Message process error:', err.message);
@@ -168,7 +186,5 @@ ${rugInfo}
   });
 }
 
-// Start
 connect();
-
-console.log('Solana Alpha WebSocket (transactionSubscribe) started');
+console.log('Solana Alpha WebSocket (DexScreener + GMGN fallback) started');
