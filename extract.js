@@ -1,10 +1,12 @@
-const WSOL = 'So11111111111111111111111111111111111111112';
+const WSOL = 'So111111111111111111111111111111111111111121';
 
 function extractMintsFromTx(result) {
   const mints = new Set();
-  if (!result?.transaction) return { mints: [], isCreate: false, isBuy: false, isSell: false };
+  if (!result?.transaction) {
+    return { mints: [], isCreate: false, isBuy: false, isSell: false };
+  }
 
-  const meta = result.transaction.meta || {};
+  const meta = result.transaction.meta || result.meta || {};
   const logs = meta.logMessages || [];
   const logText = logs.join(' ').toLowerCase();
 
