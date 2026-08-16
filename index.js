@@ -1,5 +1,5 @@
 require('dotenv').config();
-const fetch = require('node-fetch');
+const WebSocket = require('ws');
 
 const config = require('./config');
 const { extractMintsFromTx } = require('./extract');
@@ -10,6 +10,15 @@ const { getRugCheck } = require('./services/rugcheck');
 const { sendTelegram } = require('./services/telegram');
 const { isSeen } = require('./utils/cache');
 
+if (!config.VENUM_API_KEY) {
+  console.error('❌ VENUM_API_KEY belum diset');
+  process.exit(1);
+}
+
+let ws = null;
+let pingInterval = null;
+let reconnectTimeout = null;
+
 async function getTokenData(mint) {
   let pair = await getDexScreenerPair(mint);
   if (pair) {
@@ -18,34 +27,55 @@ async function getTokenData(mint) {
   }
 
   pair = await getGmgnToken(mint);
-  if (pair) {
-    console.log(`[Fallback] GMGN data untuk ${mint}`);
-    return pair;
-  }
+  if (pair) return pair;
 
   return null;
 }
 
-async function connectVenum() {
-  console.log('Connecting to Venum Cached API...');
+function connect() {
+  console.log('Connecting to Venum WebSocket...');
+  ws = new WebSocket(config.VENUM_WSS_URL);
 
-  try {
-    const res = await fetch(`${config.VENUM_BASE_URL}/pools/new`);
-    if (!res.ok) {
-      console.error(`Venum error: ${res.status}`);
-      return;
-    }
+  ws.on('open', () => {
+    console.log('✅ Venum WebSocket connected');
 
-    const data = await res.json();
-    if (!data || !Array.isArray(data)) return;
+    // === PROGRAM SUBSCRIBE (paling tepat untuk Pump.fun) ===
+    const sub = {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'programSubscribe',
+      params: [
+        config.PUMP_FUN_PROGRAM,
+        {
+          commitment: 'confirmed',
+          encoding: 'jsonParsed'
+        }
+      ]
+    };
 
-    console.log(`✅ Venum cached loaded (${data.length} pools)`);
+    ws.send(JSON.stringify(sub));
+    console.log('📡 Subscribed to Pump.fun program via programSubscribe');
+  });
 
-    for (const pool of data) {
-      // Detect new pool (biasanya ada tokenA/tokenB)
-      let mints = [];
-      if (pool.tokenA) mints.push(pool.tokenA);
-      if (pool.tokenB) mints.push(pool.tokenB);
+  ws.on('message', async (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+
+      if (msg.result !== undefined && !msg.params) {
+        console.log('Subscription ID:', msg.result);
+        return;
+      }
+
+      if (msg.error) {
+        console.error('Venum error:', msg.error);
+        return;
+      }
+
+      const result = msg.params?.result;
+      if (!result) return;
+
+      const { mints, isCreate, isBuy, isSell } = extractMintsFromTx(result);
+      if (!mints || mints.length === 0) return;
 
       for (const mint of mints) {
         if (isSeen(mint)) continue;
@@ -66,7 +96,7 @@ async function connectVenum() {
         if (a.bp5m < config.MIN_BUY_PRESSURE_5M && ageMinutes < config.EARLY_AGE_FOR_SELL_CHECK) continue;
         if (a.score < config.MIN_SCORE) continue;
 
-        // ... (sisa filter & notifikasi Telegram sama seperti sebelumnya)
+        // Filter & notifikasi Telegram (sama seperti sebelumnya)
         const name = pair.baseToken?.name || 'Unknown';
         const sym = pair.baseToken?.symbol || '???';
         const price = pair.priceUsd ? `$${Number(pair.priceUsd).toPrecision(4)}` : '—';
@@ -77,16 +107,24 @@ async function connectVenum() {
         if (a.bp5m < 0.48) label = '⚠️ EARLY + SELL PRESSURE';
         else if (a.score >= 70) label = '🚀 ALPHA';
 
-        // Rest Telegram & console log sama seperti kode sebelumnya
+        // ... rest Telegram & console log sama seperti kode sebelumnya
       }
+    } catch (err) {
+      console.error('Message process error:', err.message);
     }
-  } catch (err) {
-    console.error('Venum cached error:', err.message);
-  }
+  });
+
+  ws.on('error', (err) => {
+    console.error('WebSocket error:', err.message);
+  });
+
+  ws.on('close', () => {
+    console.log('WebSocket closed. Reconnecting in 3s...');
+    if (pingInterval) clearInterval(pingInterval);
+    if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    reconnectTimeout = setTimeout(connect, 3000);
+  });
 }
 
-// Jalankan sekali (bisa di-loop setiap 30 detik)
-connectVenum();
-setInterval(connectVenum, 30000); // update setiap 30 detik
-
-console.log('Solana Alpha Venum Cached started (gratis)');
+connect();
+console.log('Solana Alpha WebSocket (Venum) started');
