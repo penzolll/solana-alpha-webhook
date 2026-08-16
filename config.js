@@ -10,6 +10,9 @@ module.exports = {
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
 
+  // GMGN (opsional, fallback)
+  GMGN_API_KEY: process.env.GMGN_API_KEY || 'gmgn_solbscbaseethmonadtron',
+
   // Filter Early Entry
   MAX_AGE_MINUTES: 25,
   MAX_MCAP: 100000,
