@@ -1,8 +1,14 @@
 module.exports = {
-  VENUM_WSS_URL: `wss://rpc.venum.dev/?apiKey=${process.env.VENUM_API_KEY || 'gmgn_solbscbaseethmonadtron'}`,
+  VENUM_API_URL: `https://api.venum.dev/v1/stream/pools`,
+
+  // Optional: fallback ke stream-accounts (lebih tepat untuk program)
+  VENUM_FALLBACK_URL: `https://api.venum.dev/v1/stream/accounts`,
 
   PUMP_FUN_PROGRAM: '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
 
+  VENUM_API_KEY: process.env.VENUM_API_KEY,
+
+  // Filter sama seperti sebelumnya
   MAX_AGE_MINUTES: 25,
   MAX_MCAP: 100000,
   MIN_LIQ: 2500,
@@ -11,9 +17,11 @@ module.exports = {
   MIN_SCORE: 55,
   MIN_BUY_PRESSURE_5M: 0.42,
   EARLY_AGE_FOR_SELL_CHECK: 15,
+
   SEEN_TTL_MS: 1000 * 60 * 45,
   RUGCHECK_TIMEOUT_MS: 700,
   RUGCHECK_MAX_SCORE: 65,
   WSOL: 'So11111111111111111111111111111111111111112',
-  PING_INTERVAL_MS: 15000
+
+  PING_INTERVAL_MS: 30000
 };
