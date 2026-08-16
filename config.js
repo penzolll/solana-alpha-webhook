@@ -1,7 +1,7 @@
 module.exports = {
-  // Helius WebSocket
-  HELIUS_API_KEY: process.env.HELIUS_API_KEY,
-  WS_URL: `wss://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`,
+  // QuickNode WebSocket
+  // Format: wss://YOUR-ENDPOINT.solana-mainnet.quiknode.pro/YOUR_TOKEN/
+  QUICKNODE_WSS_URL: process.env.QUICKNODE_WSS_URL,
 
   // Pump.fun Bonding Curve
   PUMP_FUN_PROGRAM: '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
@@ -10,7 +10,7 @@ module.exports = {
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
 
-  // GMGN (opsional, fallback)
+  // GMGN (opsional fallback)
   GMGN_API_KEY: process.env.GMGN_API_KEY || 'gmgn_solbscbaseethmonadtron',
 
   // Filter Early Entry
@@ -21,7 +21,7 @@ module.exports = {
   MIN_VOL24: 4000,
   MIN_SCORE: 55,
 
-  // Sell Pressure Filter
+  // Sell Pressure
   MIN_BUY_PRESSURE_5M: 0.42,
   EARLY_AGE_FOR_SELL_CHECK: 15,
 
@@ -32,9 +32,6 @@ module.exports = {
   RUGCHECK_TIMEOUT_MS: 700,
   RUGCHECK_MAX_SCORE: 65,
 
-  // WSOL
   WSOL: 'So11111111111111111111111111111111111111112',
-
-  // WebSocket keep-alive
   PING_INTERVAL_MS: 15000
 };
